@@ -102,6 +102,38 @@ _RTF_STAR_PLACEHOLDER = '\x00RTFSTAR'  # Protects \* in RTF fields from italic r
 _INLINE_CODE_STASH = {}  # Stash inline code content to protect from further rules
 _INLINE_CODE_PREFIX = '\x00CODE:'
 
+# ---------------------------------------------------------------------------
+# DOCX TEXT PLACEHOLDER SYSTEM
+# User-facing text is stashed behind placeholders during inline rule processing.
+# After all XML structure is built, placeholders are replaced with XML-escaped text.
+# This prevents raw user text (with &, <, >, etc.) from breaking XML structure.
+# ---------------------------------------------------------------------------
+_DOCX_TEXT_PLACEHOLDER_PREFIX = '\x00DOCXTXT_'
+_DOCX_TEXT_PLACEHOLDER_STASH = {}  # {placeholder_key: raw_text}
+_DOCX_TEXT_PLACEHOLDER_COUNTER = 0
+
+def docx_stash_user_text(raw_text):
+    """Stash raw user text behind a placeholder. Returns the placeholder string."""
+    global _DOCX_TEXT_PLACEHOLDER_COUNTER
+    placeholder_key = f'{_DOCX_TEXT_PLACEHOLDER_PREFIX}{_DOCX_TEXT_PLACEHOLDER_COUNTER}'
+    _DOCX_TEXT_PLACEHOLDER_STASH[placeholder_key] = raw_text
+    _DOCX_TEXT_PLACEHOLDER_COUNTER += 1
+    return placeholder_key
+
+def docx_restore_all_stashed_text(docx_xml_with_placeholders):
+    """Replace all text placeholders with their XML-escaped content. Call once at the end."""
+    result = docx_xml_with_placeholders
+    for placeholder_key, raw_text in _DOCX_TEXT_PLACEHOLDER_STASH.items():
+        xml_safe_text = _xml_escape(raw_text)
+        result = result.replace(placeholder_key, xml_safe_text)
+    return result
+
+def docx_reset_text_placeholder_stash():
+    """Clear the stash and reset counter. Call at the start of each conversion."""
+    global _DOCX_TEXT_PLACEHOLDER_COUNTER
+    _DOCX_TEXT_PLACEHOLDER_STASH.clear()
+    _DOCX_TEXT_PLACEHOLDER_COUNTER = 0
+
 def _xml_escape(text):
     """Escape XML special characters."""
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')

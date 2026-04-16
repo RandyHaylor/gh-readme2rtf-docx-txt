@@ -1,9 +1,10 @@
 # DOCX Implementation Tasks
 
 ## Phase 1: Text Placeholder System
-- [ ] Create `_DOCX_TEXT_STASH` dict and `_docx_stash_text()` helper
-- [ ] Create `_docx_restore_text()` that replaces all placeholders with XML-escaped text
-- [ ] Test: stash and restore a string with `&`, `<`, `>` characters
+- [x] Create `_DOCX_TEXT_PLACEHOLDER_STASH` dict and `docx_stash_user_text()` helper
+- [x] Create `docx_restore_all_stashed_text()` that replaces all placeholders with XML-escaped text
+- [x] Create `docx_reset_text_placeholder_stash()` to clear state between conversions
+- [x] Test: stash and restore a string with `&`, `<`, `>`, `"` characters — passed
 
 ## Phase 2: Update Inline Rules to Use Placeholders
 - [ ] bold/italic/strikethrough — stash the captured text, emit XML structure with placeholder
