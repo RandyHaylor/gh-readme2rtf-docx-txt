@@ -102,6 +102,10 @@ _RTF_STAR_PLACEHOLDER = '\x00RTFSTAR'  # Protects \* in RTF fields from italic r
 _INLINE_CODE_STASH = {}  # Stash inline code content to protect from further rules
 _INLINE_CODE_PREFIX = '\x00CODE:'
 
+def _xml_escape(text):
+    """Escape XML special characters."""
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+
 def rtf_escape(text):
     """Escape special RTF characters and handle unicode."""
     result = []
@@ -200,6 +204,72 @@ def _handle_escaped_char(match):
     """Replace \\* with placeholder so it doesn't match bold/italic later."""
     return _ESCAPE_PLACEHOLDER + match.group(1)
 
+# ---------------------------------------------------------------------------
+# DOCX-SPECIFIC HANDLERS
+# ---------------------------------------------------------------------------
+# DOCX hyperlinks need relationship IDs. We collect them during inline processing
+# and resolve them when assembling the final document.xml.rels.
+_DOCX_HYPERLINK_COUNTER = 0
+_DOCX_HYPERLINKS = {}  # {rId: url}
+
+def _docx_register_hyperlink(url):
+    """Register a hyperlink URL and return its relationship ID."""
+    global _DOCX_HYPERLINK_COUNTER
+    _DOCX_HYPERLINK_COUNTER += 1
+    rid = f'rIdLink{_DOCX_HYPERLINK_COUNTER}'
+    _DOCX_HYPERLINKS[rid] = url
+    return rid
+
+def _docx_handle_md_link(match):
+    """Convert [text](url) to DOCX hyperlink XML."""
+    text = match.group(1)
+    url = match.group(2)
+    if url.startswith('#'):
+        bookmark = url[1:]
+        return f'<w:hyperlink w:anchor="{bookmark}"><w:r><w:rPr><w:color w:val="365F91"/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">{text}</w:t></w:r></w:hyperlink>'
+    rid = _docx_register_hyperlink(url)
+    return f'<w:hyperlink r:id="{rid}"><w:r><w:rPr><w:color w:val="365F91"/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">{text}</w:t></w:r></w:hyperlink>'
+
+def _docx_handle_bare_url(match):
+    """Convert bare URL to DOCX hyperlink XML."""
+    url = match.group(0)
+    rid = _docx_register_hyperlink(url)
+    return f'<w:hyperlink r:id="{rid}"><w:r><w:rPr><w:color w:val="365F91"/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">{url}</w:t></w:r></w:hyperlink>'
+
+def _docx_handle_mention(match):
+    """Convert @username to DOCX hyperlink to GitHub profile."""
+    username = match.group(1)
+    url = f'https://github.com/{username}'
+    rid = _docx_register_hyperlink(url)
+    return f'<w:hyperlink r:id="{rid}"><w:r><w:rPr><w:color w:val="365F91"/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">@{username}</w:t></w:r></w:hyperlink>'
+
+def _docx_handle_issue_ref(match):
+    """Convert #42 to DOCX hyperlink if repo context available."""
+    number = match.group(1)
+    repo = _detect_github_repo()
+    if repo:
+        url = f'https://github.com/{repo}/issues/{number}'
+        rid = _docx_register_hyperlink(url)
+        return f'<w:hyperlink r:id="{rid}"><w:r><w:rPr><w:color w:val="365F91"/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">#{number}</w:t></w:r></w:hyperlink>'
+    return f'<w:r><w:rPr><w:color w:val="365F91"/></w:rPr><w:t>#{number}</w:t></w:r>'
+
+def _docx_handle_html_img(match):
+    """Convert <img> tag to DOCX image placeholder text."""
+    tag = match.group(0)
+    alt_match = re.search(r'alt="([^"]*)"', tag)
+    src_match = re.search(r'src="([^"]*)"', tag)
+    alt_text = alt_match.group(1) if alt_match else 'image'
+    src_text = src_match.group(1) if src_match else ''
+    return f'<w:r><w:rPr><w:color w:val="666666"/></w:rPr><w:t>[Image: {alt_text} — {src_text}]</w:t></w:r>'
+
+def _docx_handle_emoji(match):
+    """Convert :shortcode: to emoji character for DOCX."""
+    shortcode = match.group(0)
+    emoji_char = EMOJI_MAP.get(shortcode)
+    if emoji_char:
+        return f'<w:r><w:t>{emoji_char}</w:t></w:r>'
+    return shortcode
+
 def _stash_inline_code(content):
     """Stash inline code content behind a placeholder so later rules can't touch it."""
     key = f'{_INLINE_CODE_PREFIX}{len(_INLINE_CODE_STASH)}'
@@ -251,64 +321,79 @@ def _handle_issue_ref(match):
         return f'{{\\field{{{_RTF_STAR_PLACEHOLDER}\\fldinst HYPERLINK "{url}"}}{{\\fldrslt \\cf2 #{number}}}}}'
     return f'{{\\cf2 #{number}}}'
 
+# Active output format — controls which replacement is used from multi-format rules
+_ACTIVE_FORMAT = 'rtf'
+
 INLINE_RULES = [
     # --- Phase 1: Strip/transform HTML and structural elements ---
-    ('html_comment',    (r'<!--.*?-->',                         '', re.DOTALL)),
-    ('html_picture',    (r'<picture>.*?<img\s+([^>]*)>.*?</picture>', r'<img \1>', re.DOTALL)),
-    ('html_source',     (r'<source[^>]*>',                      '')),
-    ('html_img',        (r'<img\s+[^>]*>',                      _handle_html_img)),
-    ('html_sub',        (r'<sub>(.*?)</sub>',                    r'{\\sub \1}')),
-    ('html_sup',        (r'<sup>(.*?)</sup>',                    r'{\\super \1}')),
-    ('html_ins',        (r'<ins>(.*?)</ins>',                    r'{\\ul \1}')),
-    ('html_br',         (r'<br\s*/?>',                           r'\\line ')),
+    # These are format-neutral (same for all outputs)
+    ('html_comment',    (r'<!--.*?-->',                         {'rtf': '', 'docx': '', 'pdf': ''}, re.DOTALL)),
+    ('html_picture',    (r'<picture>.*?<img\s+([^>]*)>.*?</picture>', {'rtf': r'<img \1>', 'docx': r'<img \1>'}, re.DOTALL)),
+    ('html_source',     (r'<source[^>]*>',                      {'rtf': '', 'docx': ''})),
+    ('html_img',        (r'<img\s+[^>]*>',                      {'rtf': _handle_html_img, 'docx': _docx_handle_html_img})),
+    ('html_sub',        (r'<sub>(.*?)</sub>',                    {'rtf': r'{\\sub \1}',
+                                                                    'docx': r'<w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>\1</w:t></w:r>'})),
+    ('html_sup',        (r'<sup>(.*?)</sup>',                    {'rtf': r'{\\super \1}',
+                                                                    'docx': r'<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>\1</w:t></w:r>'})),
+    ('html_ins',        (r'<ins>(.*?)</ins>',                    {'rtf': r'{\\ul \1}',
+                                                                    'docx': r'<w:r><w:rPr><w:u w:val="single"/></w:rPr><w:t>\1</w:t></w:r>'})),
+    ('html_br',         (r'<br\s*/?>',                           {'rtf': r'\\line ',
+                                                                    'docx': r'<w:r><w:br/></w:r>'})),
 
     # --- Phase 2: Escaped chars -> placeholders (before any markdown matching) ---
-    ('escaped_char',    (r'\\([*#_~`\[\]\\])',                   _handle_escaped_char)),
+    ('escaped_char',    (r'\\([*#_~`\[\]\\])',                   {'rtf': _handle_escaped_char, 'docx': _handle_escaped_char})),
 
     # --- Phase 3: Images and links (before inline code, which uses backticks) ---
-    ('md_image',        (r'!\[([^\]]*)\]\(([^)]+)\)',            r'{\\cf3 [Image: \1 \\u8212? \2]}')),
-    ('md_link',         (r'\[([^\]]+)\]\(([^)]+)\)',             _handle_md_link)),
-    ('bare_url',        (r'(?<!["\(])https?://[^\s<>\)]+',       _handle_bare_url)),
+    ('md_image',        (r'!\[([^\]]*)\]\(([^)]+)\)',            {'rtf': r'{\\cf3 [Image: \1 \\u8212? \2]}',
+                                                                    'docx': r'<w:r><w:rPr><w:color w:val="666666"/></w:rPr><w:t>[Image: \1 — \2]</w:t></w:r>'})),
+    ('md_link',         (r'\[([^\]]+)\]\(([^)]+)\)',             {'rtf': _handle_md_link, 'docx': _docx_handle_md_link})),
+    ('bare_url',        (r'(?<!["\(])https?://[^\s<>\)]+',       {'rtf': _handle_bare_url, 'docx': _docx_handle_bare_url})),
 
     # --- Phase 4: Inline code (stash content to protect from emoji/mention rules) ---
-    ('inline_code',     (r'`([^`]+)`',                           lambda m: _stash_inline_code(m.group(1)))),
+    ('inline_code',     (r'`([^`]+)`',                           {'rtf': lambda m: _stash_inline_code(m.group(1)),
+                                                                    'docx': lambda m: f'<w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/><w:shd w:val="clear" w:fill="E6F0FA"/></w:rPr><w:t xml:space="preserve">{m.group(1)}</w:t></w:r>'})),
 
     # --- Phase 5: GitHub-specific inline elements ---
-    ('mention',         (r'@(\w[\w/-]*)',                         _handle_mention)),
-    ('issue_ref',       (r'(?<![&A-Fa-f0-9])#(\d+)\b',          _handle_issue_ref)),
-    ('footnote_ref',    (r'\[\^([^\]]+)\]',                      lambda m: f'{{\\super {{\\field{{{_RTF_STAR_PLACEHOLDER}\\fldinst HYPERLINK \\\\l "fn-{m.group(1)}"}}{{\\fldrslt \\cf2  [{m.group(1)}] }}}}}}')),
-    ('emoji',           (r':\w+:',                                _handle_emoji)),
+    ('mention',         (r'@(\w[\w/-]*)',                         {'rtf': _handle_mention, 'docx': _docx_handle_mention})),
+    ('issue_ref',       (r'(?<![&A-Fa-f0-9])#(\d+)\b',          {'rtf': _handle_issue_ref, 'docx': _docx_handle_issue_ref})),
+    ('footnote_ref',    (r'\[\^([^\]]+)\]',                      {'rtf': lambda m: f'{{\\super {{\\field{{{_RTF_STAR_PLACEHOLDER}\\fldinst HYPERLINK \\\\l "fn-{m.group(1)}"}}{{\\fldrslt \\cf2  [{m.group(1)}] }}}}}}',
+                                                                    'docx': lambda m: f'<w:hyperlink w:anchor="fn-{m.group(1)}"><w:r><w:rPr><w:vertAlign w:val="superscript"/><w:color w:val="365F91"/></w:rPr><w:t>[{m.group(1)}]</w:t></w:r></w:hyperlink>'})),
+    ('emoji',           (r':\w+:',                                {'rtf': _handle_emoji, 'docx': _docx_handle_emoji})),
 
     # --- Phase 6: Text formatting ---
-    ('bold_italic',     (r'\*\*\*(.+?)\*\*\*',                   r'{\\b\\i \1}')),
-    ('bold_star',       (r'\*\*(.+?)\*\*',                        r'{\\b \1}')),
-    ('bold_under',      (r'__(.+?)__',                             r'{\\b \1}')),
-    ('italic_star',     (r'\*(.+?)\*',                             r'{\\i \1}')),
-    ('italic_under',    (r'(?<!\w)_(.+?)_(?!\w)',                  r'{\\i \1}')),
-    ('strikethrough',   (r'~~(.+?)~~',                             r'{\\strike \1}')),
+    ('bold_italic',     (r'\*\*\*(.+?)\*\*\*',                   {'rtf': r'{\\b\\i \1}',
+                                                                    'docx': lambda m: f'<w:r><w:rPr><w:b/><w:i/></w:rPr><w:t xml:space="preserve">{_xml_escape(m.group(1))}</w:t></w:r>'})),
+    ('bold_star',       (r'\*\*(.+?)\*\*',                        {'rtf': r'{\\b \1}',
+                                                                    'docx': lambda m: f'<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">{_xml_escape(m.group(1))}</w:t></w:r>'})),
+    ('bold_under',      (r'__(.+?)__',                             {'rtf': r'{\\b \1}',
+                                                                    'docx': lambda m: f'<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">{_xml_escape(m.group(1))}</w:t></w:r>'})),
+    ('italic_star',     (r'\*(.+?)\*',                             {'rtf': r'{\\i \1}',
+                                                                    'docx': lambda m: f'<w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">{_xml_escape(m.group(1))}</w:t></w:r>'})),
+    ('italic_under',    (r'(?<!\w)_(.+?)_(?!\w)',                  {'rtf': r'{\\i \1}',
+                                                                    'docx': lambda m: f'<w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">{_xml_escape(m.group(1))}</w:t></w:r>'})),
+    ('strikethrough',   (r'~~(.+?)~~',                             {'rtf': r'{\\strike \1}',
+                                                                    'docx': lambda m: f'<w:r><w:rPr><w:strike/></w:rPr><w:t xml:space="preserve">{_xml_escape(m.group(1))}</w:t></w:r>'})),
 ]
 
 
-def apply_inline_rules(text):
-    """Apply all inline conversion rules in order."""
+def apply_inline_rules(text, fmt=None):
+    """Apply all inline conversion rules in order for the given format."""
+    target_fmt = fmt or _ACTIVE_FORMAT
     for rule_name, rule_def in INLINE_RULES:
-        if callable(rule_def):
-            # rule_def is a standalone callable — shouldn't happen with current structure
-            text = rule_def(text)
-        elif len(rule_def) == 3 and isinstance(rule_def[2], int):
-            # (pattern, replacement, flags)
-            pattern, replacement, flags = rule_def
-            if callable(replacement):
-                text = re.sub(pattern, replacement, text, flags=flags)
-            else:
-                text = re.sub(pattern, replacement, text, flags=flags)
+        # rule_def is (pattern, format_dict) or (pattern, format_dict, flags)
+        pattern = rule_def[0]
+        format_dict = rule_def[1]
+        flags = rule_def[2] if len(rule_def) == 3 and isinstance(rule_def[2], int) else 0
+
+        # Get replacement for the target format, fall back to 'rtf'
+        replacement = format_dict.get(target_fmt, format_dict.get('rtf'))
+        if replacement is None:
+            continue
+
+        if callable(replacement):
+            text = re.sub(pattern, replacement, text, flags=flags)
         else:
-            # (pattern, replacement)
-            pattern, replacement = rule_def[0], rule_def[1]
-            if callable(replacement):
-                text = re.sub(pattern, replacement, text)
-            else:
-                text = re.sub(pattern, replacement, text)
+            text = re.sub(pattern, replacement, text, flags=flags)
 
     # Final phase: restore placeholders
     text = text.replace(_ESCAPE_PLACEHOLDER, '')
@@ -689,20 +774,296 @@ def block_paragraph(lines, index):
     return (rtf, consumed)
 
 
+# ---------------------------------------------------------------------------
+# DOCX BLOCK RULES
+# ---------------------------------------------------------------------------
+
+def docx_block_blank_line(lines, index):
+    if lines[index].strip() == '':
+        return ('', 1)
+    return None
+
+def docx_block_horizontal_rule(lines, index):
+    if re.match(r'^(\s*[-*_]\s*){3,}$', lines[index]):
+        return ('<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>', 1)
+    return None
+
+def docx_block_heading(lines, index):
+    heading_match = re.match(r'^(#{1,6})\s+(.*)', lines[index])
+    if heading_match:
+        level = len(heading_match.group(1))
+        raw_text = heading_match.group(2)
+        bookmark_id = _heading_to_bookmark_id(raw_text)
+        bid = hash(bookmark_id) % 10000
+        # Heading text — escape for XML, no inline formatting needed for headings
+        escaped = raw_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        xml = (f'<w:p><w:pPr><w:pStyle w:val="Heading{level}"/></w:pPr>'
+               f'<w:bookmarkStart w:id="{bid}" w:name="{bookmark_id}"/>'
+               f'<w:bookmarkEnd w:id="{bid}"/>'
+               f'<w:r><w:t xml:space="preserve">{escaped}</w:t></w:r></w:p>')
+        return (xml, 1)
+    return None
+
+def docx_block_html_picture(lines, index):
+    if not re.match(r'^\s*<picture', lines[index], re.IGNORECASE):
+        return None
+    collected = [lines[index]]
+    consumed = 1
+    while index + consumed < len(lines) and '</picture>' not in collected[-1].lower():
+        collected.append(lines[index + consumed])
+        consumed += 1
+    joined = ' '.join(l.strip() for l in collected)
+    formatted = apply_inline_rules(joined, fmt='docx')
+    return (f'<w:p>{formatted}</w:p>', consumed)
+
+def docx_block_html_img(lines, index):
+    if not re.match(r'^\s*<img\s', lines[index], re.IGNORECASE):
+        return None
+    formatted = apply_inline_rules(lines[index].strip(), fmt='docx')
+    return (f'<w:p>{formatted}</w:p>', 1)
+
+def docx_block_fenced_code(lines, index):
+    fence_match = re.match(r'^(\s*)```(\w*)', lines[index])
+    if not fence_match:
+        return None
+    indent = fence_match.group(1)
+    consumed = 1
+    code_lines = []
+    while index + consumed < len(lines):
+        current_line = lines[index + consumed]
+        if current_line.strip().startswith('```'):
+            consumed += 1
+            break
+        if indent and current_line.startswith(indent):
+            current_line = current_line[len(indent):]
+        code_lines.append(current_line)
+        consumed += 1
+    # Each line is a paragraph with monospace font and shaded background
+    parts = []
+    for line in code_lines:
+        escaped = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        parts.append(
+            f'<w:p><w:pPr><w:shd w:val="clear" w:fill="E6F0FA"/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
+            f'<w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr>'
+            f'<w:t xml:space="preserve">{escaped}</w:t></w:r></w:p>'
+        )
+    return ('\n'.join(parts), consumed)
+
+def docx_block_table(lines, index):
+    line = lines[index]
+    if not ('|' in line and line.strip().startswith('|')):
+        return None
+    next_line = lines[index + 1] if index + 1 < len(lines) else ''
+    if not re.match(r'^[\s|:-]+$', next_line):
+        return None
+    rows = []
+    consumed = 0
+    while index + consumed < len(lines) and '|' in lines[index + consumed]:
+        row_text = lines[index + consumed].strip().strip('|')
+        cells = [cell.strip() for cell in row_text.split('|')]
+        rows.append(cells)
+        consumed += 1
+    if len(rows) < 2:
+        return None
+    header_row = rows[0]
+    data_rows = rows[2:]
+    num_cols = len(header_row)
+    col_width = 9000 // num_cols
+
+    parts = ['<w:tbl><w:tblPr><w:tblBorders>'
+             '<w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '<w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '<w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '<w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '</w:tblBorders></w:tblPr>']
+
+    # Header row
+    parts.append('<w:tr>')
+    for cell in header_row:
+        escaped = cell.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        parts.append(f'<w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr>'
+                     f'<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">{escaped}</w:t></w:r></w:p></w:tc>')
+    parts.append('</w:tr>')
+
+    for row in data_rows:
+        parts.append('<w:tr>')
+        for ci in range(num_cols):
+            cell = row[ci] if ci < len(row) else ''
+            formatted = apply_inline_rules(cell, fmt='docx')
+            wrapped = _docx_wrap_plain_text_in_runs(formatted)
+            parts.append(f'<w:tc><w:p>{wrapped}</w:p></w:tc>')
+        parts.append('</w:tr>')
+
+    parts.append('</w:tbl>')
+    return ('\n'.join(parts), consumed)
+
+def docx_block_blockquote(lines, index):
+    if not lines[index].startswith('>'):
+        return None
+    quote_lines = []
+    consumed = 0
+    while index + consumed < len(lines):
+        current = lines[index + consumed]
+        if current.startswith('>'):
+            stripped = re.sub(r'^>\s?', '', current)
+            quote_lines.append(stripped)
+            consumed += 1
+        elif current.strip() == '':
+            next_idx = index + consumed + 1
+            if next_idx < len(lines) and lines[next_idx].startswith('>'):
+                next_stripped = re.sub(r'^>\s?', '', lines[next_idx])
+                if next_stripped.strip() in ALERT_TYPES:
+                    break
+                quote_lines.append('')
+                consumed += 1
+            else:
+                break
+        else:
+            break
+
+    # Check for alert
+    is_alert = False
+    alert_label = ''
+    if quote_lines and quote_lines[0].strip() in ALERT_TYPES:
+        alert_label, _, _ = ALERT_TYPES[quote_lines[0].strip()]
+        quote_lines = quote_lines[1:]
+        is_alert = True
+
+    parts = []
+    for ql in quote_lines:
+        text = apply_inline_rules(ql, fmt='docx') if ql.strip() else ''
+        wrapped = _docx_wrap_plain_text_in_runs(text) if text else ''
+        if is_alert:
+            parts.append(f'<w:p><w:pPr><w:ind w:left="720"/><w:shd w:val="clear" w:fill="E6F0FA"/></w:pPr>'
+                         f'{wrapped}</w:p>')
+        else:
+            parts.append(f'<w:p><w:pPr><w:ind w:left="720"/><w:pBdr>'
+                         f'<w:left w:val="single" w:sz="12" w:space="4" w:color="CCCCCC"/>'
+                         f'</w:pBdr></w:pPr>{wrapped}</w:p>')
+    if is_alert:
+        alert_para = (f'<w:p><w:pPr><w:ind w:left="720"/><w:shd w:val="clear" w:fill="E6F0FA"/></w:pPr>'
+                      f'<w:r><w:rPr><w:b/><w:color w:val="365F91"/></w:rPr>'
+                      f'<w:t>{alert_label}</w:t></w:r></w:p>')
+        parts.insert(0, alert_para)
+
+    return ('\n'.join(parts), consumed)
+
+def docx_block_list(lines, index):
+    if not detect_list_item(lines[index]):
+        return None
+    parts = []
+    consumed = 0
+    while index + consumed < len(lines):
+        list_info = detect_list_item(lines[index + consumed])
+        if not list_info:
+            break
+        nest_level, marker_type, content = list_info
+        is_task, is_checked, task_content = detect_task_checkbox(content)
+        display_content = task_content if is_task else content
+        formatted = apply_inline_rules(display_content, fmt='docx')
+        indent = 720 + (nest_level * 360)
+
+        if is_task:
+            checkbox = '\u2611' if is_checked else '\u2610'
+            prefix = f'{checkbox} '
+        elif marker_type == 'unordered':
+            prefix = '\u2022 '
+        else:
+            number = marker_type.split(':')[1]
+            prefix = f'{number}. '
+
+        wrapped = _docx_wrap_plain_text_in_runs(formatted)
+        parts.append(
+            f'<w:p><w:pPr><w:ind w:left="{indent}"/><w:spacing w:after="40"/></w:pPr>'
+            f'<w:r><w:t xml:space="preserve">{prefix}</w:t></w:r>{wrapped}</w:p>'
+        )
+        consumed += 1
+    return ('\n'.join(parts), consumed)
+
+def docx_block_footnote_def(lines, index):
+    match = re.match(r'^\[\^([^\]]+)\]:\s*(.*)', lines[index])
+    if not match:
+        return None
+    fid = match.group(1)
+    ftext = match.group(2)
+    _collected_footnotes.append((fid, ftext))
+    return ('', 1)
+
+def _docx_wrap_plain_text_in_runs(text):
+    """Wrap any plain text segments (not already in <w:r> tags) into <w:r><w:t> runs."""
+    # Split on existing <w:r> and <w:hyperlink> elements, wrap the gaps
+    parts = re.split(r'(<w:(?:r|hyperlink|bookmarkStart|bookmarkEnd)[^>]*>.*?</w:(?:r|hyperlink)>|<w:(?:r|bookmarkStart|bookmarkEnd)\s*/>)', text, flags=re.DOTALL)
+    result = []
+    for part in parts:
+        if not part or part.startswith('<w:'):
+            result.append(part or '')
+        else:
+            # Plain text — wrap in a run
+            escaped = part.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            if escaped.strip():
+                result.append(f'<w:r><w:t xml:space="preserve">{escaped}</w:t></w:r>')
+            elif escaped:
+                result.append(f'<w:r><w:t xml:space="preserve">{escaped}</w:t></w:r>')
+    return ''.join(result)
+
+def docx_block_paragraph(lines, index):
+    collected = []
+    consumed = 0
+    while index + consumed < len(lines):
+        current = lines[index + consumed]
+        if current.strip() == '':
+            break
+        if consumed > 0 and (
+            re.match(r'^#{1,6}\s', current) or
+            re.match(r'^(\s*)```', current) or
+            re.match(r'^(\s*[-*_]\s*){3,}$', current) or
+            current.startswith('>') or
+            re.match(r'^\s*<(picture|img)\s', current, re.IGNORECASE) or
+            detect_list_item(current) or
+            ('|' in current and current.strip().startswith('|'))
+        ):
+            break
+        collected.append(current)
+        consumed += 1
+    if not collected:
+        return None
+    paragraph_text = ' '.join(collected)
+    formatted = apply_inline_rules(paragraph_text, fmt='docx')
+    wrapped = _docx_wrap_plain_text_in_runs(formatted)
+    return (f'<w:p>{wrapped}</w:p>', consumed)
+
+
 # Ordered list of block rules — first match wins
-BLOCK_RULES = [
-    block_blank_line,
-    block_horizontal_rule,
-    block_heading,
-    block_html_picture,
-    block_html_img,
-    block_fenced_code,
-    block_table,
-    block_blockquote,
-    block_list,
-    block_footnote_def,
-    block_paragraph,
-]
+BLOCK_RULES = {
+    'rtf': [
+        block_blank_line,
+        block_horizontal_rule,
+        block_heading,
+        block_html_picture,
+        block_html_img,
+        block_fenced_code,
+        block_table,
+        block_blockquote,
+        block_list,
+        block_footnote_def,
+        block_paragraph,
+    ],
+    'docx': [
+        docx_block_blank_line,
+        docx_block_horizontal_rule,
+        docx_block_heading,
+        docx_block_html_picture,
+        docx_block_html_img,
+        docx_block_fenced_code,
+        docx_block_table,
+        docx_block_blockquote,
+        docx_block_list,
+        docx_block_footnote_def,
+        docx_block_paragraph,
+    ],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -737,7 +1098,7 @@ def convert_markdown_to_rtf(markdown_text):
 
     while line_index < len(lines):
         matched = False
-        for block_rule in BLOCK_RULES:
+        for block_rule in BLOCK_RULES['rtf']:
             result = block_rule(lines, line_index)
             if result is not None:
                 rtf_content, lines_consumed = result
@@ -758,23 +1119,157 @@ def convert_markdown_to_rtf(markdown_text):
 
 
 # ---------------------------------------------------------------------------
+# DOCX CONVERSION ENGINE
+# ---------------------------------------------------------------------------
+
+DOCX_STYLES_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults><w:rPrDefault><w:rPr>
+    <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/>
+    <w:sz w:val="22"/><w:szCs w:val="22"/>
+  </w:rPr></w:rPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="480" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="48"/><w:color w:val="365F91"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="280" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="36"/><w:color w:val="365F91"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="240" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="30"/><w:color w:val="365F91"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="200" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="26"/><w:color w:val="365F91"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading5"><w:name w:val="heading 5"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="160" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="24"/><w:color w:val="365F91"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading6"><w:name w:val="heading 6"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="120" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="22"/><w:color w:val="365F91"/></w:rPr></w:style>
+</w:styles>'''
+
+
+def _build_docx_footnotes_section():
+    """Build footnotes section as DOCX XML paragraphs."""
+    if not _collected_footnotes:
+        return ''
+    parts = []
+    parts.append('<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>')
+    parts.append('<w:p><w:pPr><w:spacing w:before="120"/></w:pPr>'
+                 '<w:r><w:rPr><w:b/><w:sz w:val="20"/></w:rPr><w:t>Footnotes</w:t></w:r></w:p>')
+    for fid, ftext in _collected_footnotes:
+        formatted = apply_inline_rules(ftext, fmt='docx')
+        bookmark = f'fn-{fid}'
+        bid = hash(bookmark) % 10000
+        parts.append(
+            f'<w:p><w:pPr><w:ind w:left="360"/><w:spacing w:after="40"/></w:pPr>'
+            f'<w:bookmarkStart w:id="{bid}" w:name="{bookmark}"/>'
+            f'<w:bookmarkEnd w:id="{bid}"/>'
+            f'<w:r><w:rPr><w:b/><w:sz w:val="18"/></w:rPr><w:t>{fid}.</w:t></w:r>'
+            f'<w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t xml:space="preserve"> {formatted}</w:t></w:r></w:p>'
+        )
+    return '\n'.join(parts)
+
+
+def convert_markdown_to_docx(markdown_text, output_path):
+    """Convert a GFM markdown string to a DOCX file."""
+    import zipfile
+    global _DOCX_HYPERLINK_COUNTER
+    _DOCX_HYPERLINK_COUNTER = 0
+    _DOCX_HYPERLINKS.clear()
+    _collected_footnotes.clear()
+
+    lines = markdown_text.split('\n')
+    body_parts = []
+    line_index = 0
+
+    while line_index < len(lines):
+        matched = False
+        for block_rule in BLOCK_RULES['docx']:
+            result = block_rule(lines, line_index)
+            if result is not None:
+                xml_content, lines_consumed = result
+                if xml_content:
+                    body_parts.append(xml_content)
+                line_index += lines_consumed
+                matched = True
+                break
+        if not matched:
+            line_index += 1
+
+    # Append footnotes
+    footnotes_xml = _build_docx_footnotes_section()
+    if footnotes_xml:
+        body_parts.append(footnotes_xml)
+
+    # Build document.xml
+    body_content = '\n'.join(body_parts)
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<w:body>'
+        f'{body_content}'
+        '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>'
+        '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>'
+        '</w:sectPr></w:body></w:document>'
+    )
+
+    # Build document.xml.rels (styles + hyperlinks)
+    rels = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>']
+    for rid, url in _DOCX_HYPERLINKS.items():
+        rels.append(f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="{url}" TargetMode="External"/>')
+    rels.append('</Relationships>')
+    doc_rels_xml = '\n'.join(rels)
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+        '</Types>'
+    )
+
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        '</Relationships>'
+    )
+
+    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('[Content_Types].xml', content_types)
+        zf.writestr('_rels/.rels', root_rels)
+        zf.writestr('word/document.xml', document_xml)
+        zf.writestr('word/_rels/document.xml.rels', doc_rels_xml)
+        zf.writestr('word/styles.xml', DOCX_STYLES_XML)
+
+
+# ---------------------------------------------------------------------------
 # CLI ENTRY POINT
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print(f'Usage: {sys.argv[0]} <input.md> [output.rtf]', file=sys.stderr)
+        print(f'Usage: {sys.argv[0]} <input.md> [output.rtf|output.docx]', file=sys.stderr)
         sys.exit(1)
 
     input_markdown_path = sys.argv[1]
-    output_rtf_path = sys.argv[2] if len(sys.argv) > 2 else input_markdown_path.rsplit('.', 1)[0] + '.rtf'
+    output_path = sys.argv[2] if len(sys.argv) > 2 else input_markdown_path.rsplit('.', 1)[0] + '.rtf'
 
     with open(input_markdown_path, 'r', encoding='utf-8') as markdown_file:
         markdown_content = markdown_file.read()
 
-    rtf_output = convert_markdown_to_rtf(markdown_content)
+    if output_path.endswith('.docx'):
+        convert_markdown_to_docx(markdown_content, output_path)
+    else:
+        rtf_output = convert_markdown_to_rtf(markdown_content)
+        with open(output_path, 'w', encoding='utf-8') as rtf_file:
+            rtf_file.write(rtf_output)
 
-    with open(output_rtf_path, 'w', encoding='utf-8') as rtf_file:
-        rtf_file.write(rtf_output)
-
-    print(f'Converted: {input_markdown_path} -> {output_rtf_path}')
+    print(f'Converted: {input_markdown_path} -> {output_path}')

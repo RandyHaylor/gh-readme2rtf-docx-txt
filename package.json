@@ -1,7 +1,0 @@
-{
-  "dependencies": {
-    "html-to-rtf": "^2.1.0",
-    "html-to-rtf-browser": "^1.6.1",
-    "sharp": "^0.34.5"
-  }
-}
