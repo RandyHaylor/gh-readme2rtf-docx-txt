@@ -255,7 +255,7 @@ INLINE_RULES = [
     # --- Phase 4: GitHub-specific inline elements ---
     ('mention',         (r'@(\w[\w/-]*)',                         _handle_mention)),
     ('issue_ref',       (r'(?<![&A-Fa-f0-9])#(\d+)\b',          _handle_issue_ref)),
-    ('footnote_ref',    (r'\[\^([^\]]+)\]',                      lambda m: f' [{{\\field{{{_RTF_STAR_PLACEHOLDER}\\fldinst HYPERLINK \\\\l "fn-{m.group(1)}"}}{{\\fldrslt \\super \\cf2 {m.group(1)}}}}}] ')),
+    ('footnote_ref',    (r'\[\^([^\]]+)\]',                      lambda m: f'{{\\super {{\\field{{{_RTF_STAR_PLACEHOLDER}\\fldinst HYPERLINK \\\\l "fn-{m.group(1)}"}}{{\\fldrslt \\cf2  [{m.group(1)}] }}}}}}')),
     ('emoji',           (r':\w+:',                                _handle_emoji)),
 
     # --- Phase 5: Inline code (before bold/italic to protect backtick content) ---
