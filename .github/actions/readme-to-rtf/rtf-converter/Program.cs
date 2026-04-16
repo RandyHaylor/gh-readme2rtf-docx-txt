@@ -18,6 +18,8 @@ class Program
 {
     static void Main(string[] args)
     {
+        // Register Windows-1252 encoding required by RtfPipe on .NET Core
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         if (args.Length < 2)
         {
             Console.WriteLine("Usage: rtf-converter <input.rtf> <output.docx|output.pdf>");
