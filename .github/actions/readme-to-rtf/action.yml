@@ -1,15 +1,11 @@
-name: 'README to RTF'
-description: 'Convert GitHub-flavored Markdown README to RTF with embedded images'
+name: 'README to RTF/DOCX/PDF'
+description: 'Convert GitHub-flavored Markdown to RTF, DOCX, and PDF based on config'
 
 inputs:
-  input:
-    description: 'Path to input markdown file'
+  config:
+    description: 'Path to readme-to-rtf-pdf-doc.json config file'
     required: false
-    default: 'README.md'
-  output:
-    description: 'Path to output RTF file'
-    required: false
-    default: 'README.rtf'
+    default: 'readme-to-rtf-pdf-doc.json'
 
 runs:
   using: 'composite'
@@ -18,10 +14,53 @@ runs:
       shell: bash
       run: pip install pygments pillow
 
-    - name: Convert Markdown to RTF
-      shell: bash
-      run: python3 ${{ github.action_path }}/gfm_markdown_to_rtf.py ${{ inputs.input }} ${{ inputs.output }}
+    - name: Run conversion pipeline
+      shell: python
+      env:
+        CONFIG_PATH: ${{ inputs.config }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        import json
+        import os
+        import subprocess
+        import sys
 
-    - name: Embed images into RTF
-      shell: bash
-      run: python3 ${{ github.action_path }}/rtf_image_embedder.py ${{ inputs.output }}
+        config_path = os.environ['CONFIG_PATH']
+        action_path = os.environ['ACTION_PATH']
+
+        with open(config_path) as f:
+            config = json.load(f)
+
+        converter_script = os.path.join(action_path, 'gfm_markdown_to_rtf.py')
+        embedder_script = os.path.join(action_path, 'rtf_image_embedder.py')
+
+        generated_files = []
+
+        for entry in config.get('files', []):
+            input_file = entry['input']
+            formats = entry.get('output_formats', ['rtf'])
+            base_name = input_file.rsplit('.', 1)[0]
+
+            # Always generate RTF first (it's our source format)
+            rtf_path = base_name + '.rtf'
+            print(f'Converting {input_file} -> {rtf_path}')
+            subprocess.run([sys.executable, converter_script, input_file, rtf_path], check=True)
+            subprocess.run([sys.executable, embedder_script, rtf_path], check=True)
+
+            if 'rtf' in formats:
+                generated_files.append(rtf_path)
+
+            # DOCX and PDF need aspose-words (handled in separate Windows job)
+            # Store what's needed for the next job
+            needs_aspose = [f for f in formats if f in ('docx', 'pdf')]
+            if needs_aspose:
+                manifest = {'rtf': rtf_path, 'formats': needs_aspose, 'base_name': base_name}
+                manifest_path = base_name + '.convert-manifest.json'
+                with open(manifest_path, 'w') as mf:
+                    json.dump(manifest, mf)
+                generated_files.append(manifest_path)
+
+        # Write list of generated files for downstream steps
+        with open('generated-files.txt', 'w') as f:
+            f.write('\n'.join(generated_files))
+        print(f'Generated: {generated_files}')

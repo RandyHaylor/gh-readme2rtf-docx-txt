@@ -1,4 +1,4 @@
-name: Convert README to RTF, DOCX, PDF
+name: Convert README to RTF/DOCX/PDF
 
 on:
   workflow_dispatch:
@@ -14,34 +14,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Convert README to RTF
+      - name: Convert markdown to RTF
         uses: ./.github/actions/readme-to-rtf
 
-      - name: Upload RTF artifact
+      - name: Upload artifacts for next job
         uses: actions/upload-artifact@v4
         with:
-          name: readme-rtf
-          path: README.rtf
-
-      - name: Configure git
-        shell: bash
-        run: git config user.name "github-actions[bot]"
-
-      - name: Configure git email
-        shell: bash
-        run: git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Stage RTF
-        shell: bash
-        run: git add README.rtf
-
-      - name: Commit if changed
-        shell: bash
-        run: 'git diff --cached --quiet || git commit -m "auto-regenerate README.rtf from README.md"'
-
-      - name: Push
-        shell: bash
-        run: git push
+          name: rtf-output
+          path: |
+            *.rtf
+            *.convert-manifest.json
+            readme-to-rtf-pdf-doc.json
 
   convert-docx-pdf:
     needs: convert-rtf
@@ -50,12 +33,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: main
 
-      - name: Pull latest (includes RTF from previous job)
-        shell: bash
-        run: git pull
+      - name: Download RTF artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: rtf-output
 
       - name: Install aspose-words
         shell: bash
@@ -64,29 +46,90 @@ jobs:
       - name: Convert RTF to DOCX and PDF
         shell: python
         run: |
-          import aspose.words as aw
-          doc = aw.Document("README.rtf")
-          doc.save("README.docx")
-          print("Created README.docx")
-          doc.save("README.pdf")
-          print("Created README.pdf")
+          import json
+          import glob
+          import os
+
+          manifests = glob.glob('*.convert-manifest.json')
+          generated = []
+
+          for manifest_path in manifests:
+              with open(manifest_path) as f:
+                  manifest = json.load(f)
+
+              rtf_path = manifest['rtf']
+              formats = manifest['formats']
+              base_name = manifest['base_name']
+
+              if not os.path.exists(rtf_path):
+                  print(f'RTF not found: {rtf_path}')
+                  continue
+
+              import aspose.words as aw
+              doc = aw.Document(rtf_path)
+
+              if 'docx' in formats:
+                  docx_path = base_name + '.docx'
+                  doc.save(docx_path)
+                  generated.append(docx_path)
+                  print(f'Created {docx_path}')
+
+              if 'pdf' in formats:
+                  pdf_path = base_name + '.pdf'
+                  doc.save(pdf_path)
+                  generated.append(pdf_path)
+                  print(f'Created {pdf_path}')
+
+          print(f'Generated: {generated}')
+
+      - name: Read config for commit/release settings
+        id: config
+        shell: python
+        run: |
+          import json
+          import os
+
+          with open('readme-to-rtf-pdf-doc.json') as f:
+              config = json.load(f)
+
+          # Check if any file wants commit_to_repo
+          commit = any(e.get('commit_to_repo', False) for e in config.get('files', []))
+          release = any(e.get('attach_to_release', False) for e in config.get('files', []))
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'commit_to_repo={str(commit).lower()}\n')
+              f.write(f'attach_to_release={str(release).lower()}\n')
 
       - name: Configure git
+        if: steps.config.outputs.commit_to_repo == 'true'
         shell: bash
         run: git config user.name "github-actions[bot]"
 
       - name: Configure git email
+        if: steps.config.outputs.commit_to_repo == 'true'
         shell: bash
         run: git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Stage DOCX and PDF
+      - name: Pull latest
+        if: steps.config.outputs.commit_to_repo == 'true'
         shell: bash
-        run: git add README.docx README.pdf
+        run: git pull
+
+      - name: Stage generated files
+        if: steps.config.outputs.commit_to_repo == 'true'
+        shell: bash
+        run: git add *.rtf *.docx *.pdf 2>/dev/null || true
+
+      - name: Clean up manifest files
+        shell: bash
+        run: rm -f *.convert-manifest.json
 
       - name: Commit if changed
+        if: steps.config.outputs.commit_to_repo == 'true'
         shell: bash
-        run: 'git diff --cached --quiet || git commit -m "auto-regenerate README.docx and README.pdf"'
+        run: 'git diff --cached --quiet || git commit -m "auto-regenerate README documents"'
 
       - name: Push
+        if: steps.config.outputs.commit_to_repo == 'true'
         shell: bash
         run: git push

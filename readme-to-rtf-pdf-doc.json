@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "input": "README.md",
+      "output_formats": ["rtf", "docx", "pdf"],
+      "attach_to_release": true,
+      "commit_to_repo": true,
+      "commit_to_repo_output_dir": "docs"
+    },
+    {
+      "input": "example-module-with-readme/README.md",
+      "output_formats": ["rtf"],
+      "attach_to_release": false,
+      "commit_to_repo": true,
+      "commit_to_repo_output_dir": "example-module-with-readme"
+    }
+  ]
+}
