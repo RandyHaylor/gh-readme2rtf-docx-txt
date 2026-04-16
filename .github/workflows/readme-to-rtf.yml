@@ -1,4 +1,4 @@
-name: Convert README to RTF
+name: Convert README to RTF, DOCX, PDF
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
       - 'README.md'
 
 jobs:
-  convert:
+  convert-rtf:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -16,6 +16,12 @@ jobs:
 
       - name: Convert README to RTF
         uses: ./.github/actions/readme-to-rtf
+
+      - name: Upload RTF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: readme-rtf
+          path: README.rtf
 
       - name: Configure git
         shell: bash
@@ -32,6 +38,54 @@ jobs:
       - name: Commit if changed
         shell: bash
         run: 'git diff --cached --quiet || git commit -m "auto-regenerate README.rtf from README.md"'
+
+      - name: Push
+        shell: bash
+        run: git push
+
+  convert-docx-pdf:
+    needs: convert-rtf
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Pull latest (includes RTF from previous job)
+        shell: bash
+        run: git pull
+
+      - name: Install aspose-words
+        shell: bash
+        run: pip install aspose-words
+
+      - name: Convert RTF to DOCX and PDF
+        shell: python
+        run: |
+          import aspose.words as aw
+          doc = aw.Document("README.rtf")
+          doc.save("README.docx")
+          print("Created README.docx")
+          doc.save("README.pdf")
+          print("Created README.pdf")
+
+      - name: Configure git
+        shell: bash
+        run: git config user.name "github-actions[bot]"
+
+      - name: Configure git email
+        shell: bash
+        run: git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Stage DOCX and PDF
+        shell: bash
+        run: git add README.docx README.pdf
+
+      - name: Commit if changed
+        shell: bash
+        run: 'git diff --cached --quiet || git commit -m "auto-regenerate README.docx and README.pdf"'
 
       - name: Push
         shell: bash
