@@ -31,7 +31,7 @@ jobs:
 
       - name: Commit if changed
         shell: bash
-        run: git diff --cached --quiet || git commit -m "auto: regenerate README.rtf from README.md"
+        run: 'git diff --cached --quiet || git commit -m "auto-regenerate README.rtf from README.md"'
 
       - name: Push
         shell: bash
