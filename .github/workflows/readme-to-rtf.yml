@@ -1,10 +1,10 @@
 name: Convert README to RTF
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - 'README.md'
-      - '.github/actions/readme-to-rtf/**'
 
 jobs:
   convert:
