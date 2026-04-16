@@ -770,20 +770,274 @@ def block_paragraph(lines, index):
     return (rtf, consumed)
 
 
+# ---------------------------------------------------------------------------
+# DOCX BLOCK RULES
+# ---------------------------------------------------------------------------
+
+def docx_block_blank_line(lines, index):
+    if lines[index].strip() == '':
+        return ('', 1)
+    return None
+
+def docx_block_horizontal_rule(lines, index):
+    if re.match(r'^(\s*[-*_]\s*){3,}$', lines[index]):
+        return ('<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>', 1)
+    return None
+
+def docx_block_heading(lines, index):
+    heading_match = re.match(r'^(#{1,6})\s+(.*)', lines[index])
+    if heading_match:
+        level = len(heading_match.group(1))
+        raw_text = heading_match.group(2)
+        bookmark_id = _heading_to_bookmark_id(raw_text)
+        text = apply_inline_rules(raw_text, fmt='docx')
+        xml = (f'<w:p><w:pPr><w:pStyle w:val="Heading{level}"/></w:pPr>'
+               f'<w:bookmarkStart w:id="{hash(bookmark_id) % 10000}" w:name="{bookmark_id}"/>'
+               f'<w:bookmarkEnd w:id="{hash(bookmark_id) % 10000}"/>'
+               f'<w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>')
+        return (xml, 1)
+    return None
+
+def docx_block_html_picture(lines, index):
+    if not re.match(r'^\s*<picture', lines[index], re.IGNORECASE):
+        return None
+    collected = [lines[index]]
+    consumed = 1
+    while index + consumed < len(lines) and '</picture>' not in collected[-1].lower():
+        collected.append(lines[index + consumed])
+        consumed += 1
+    joined = ' '.join(l.strip() for l in collected)
+    formatted = apply_inline_rules(joined, fmt='docx')
+    return (f'<w:p>{formatted}</w:p>', consumed)
+
+def docx_block_html_img(lines, index):
+    if not re.match(r'^\s*<img\s', lines[index], re.IGNORECASE):
+        return None
+    formatted = apply_inline_rules(lines[index].strip(), fmt='docx')
+    return (f'<w:p>{formatted}</w:p>', 1)
+
+def docx_block_fenced_code(lines, index):
+    fence_match = re.match(r'^(\s*)```(\w*)', lines[index])
+    if not fence_match:
+        return None
+    indent = fence_match.group(1)
+    consumed = 1
+    code_lines = []
+    while index + consumed < len(lines):
+        current_line = lines[index + consumed]
+        if current_line.strip().startswith('```'):
+            consumed += 1
+            break
+        if indent and current_line.startswith(indent):
+            current_line = current_line[len(indent):]
+        code_lines.append(current_line)
+        consumed += 1
+    # Each line is a paragraph with monospace font and shaded background
+    parts = []
+    for line in code_lines:
+        escaped = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        parts.append(
+            f'<w:p><w:pPr><w:shd w:val="clear" w:fill="E6F0FA"/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
+            f'<w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr>'
+            f'<w:t xml:space="preserve">{escaped}</w:t></w:r></w:p>'
+        )
+    return ('\n'.join(parts), consumed)
+
+def docx_block_table(lines, index):
+    line = lines[index]
+    if not ('|' in line and line.strip().startswith('|')):
+        return None
+    next_line = lines[index + 1] if index + 1 < len(lines) else ''
+    if not re.match(r'^[\s|:-]+$', next_line):
+        return None
+    rows = []
+    consumed = 0
+    while index + consumed < len(lines) and '|' in lines[index + consumed]:
+        row_text = lines[index + consumed].strip().strip('|')
+        cells = [cell.strip() for cell in row_text.split('|')]
+        rows.append(cells)
+        consumed += 1
+    if len(rows) < 2:
+        return None
+    header_row = rows[0]
+    data_rows = rows[2:]
+    num_cols = len(header_row)
+    col_width = 9000 // num_cols
+
+    parts = ['<w:tbl><w:tblPr><w:tblBorders>'
+             '<w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '<w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '<w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '<w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+             '</w:tblBorders></w:tblPr>']
+
+    # Header row
+    parts.append('<w:tr>')
+    for cell in header_row:
+        formatted = apply_inline_rules(cell, fmt='docx')
+        parts.append(f'<w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr>'
+                     f'<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">{formatted}</w:t></w:r></w:p></w:tc>')
+    parts.append('</w:tr>')
+
+    for row in data_rows:
+        parts.append('<w:tr>')
+        for ci in range(num_cols):
+            cell = row[ci] if ci < len(row) else ''
+            formatted = apply_inline_rules(cell, fmt='docx')
+            parts.append(f'<w:tc><w:p><w:r><w:t xml:space="preserve">{formatted}</w:t></w:r></w:p></w:tc>')
+        parts.append('</w:tr>')
+
+    parts.append('</w:tbl>')
+    return ('\n'.join(parts), consumed)
+
+def docx_block_blockquote(lines, index):
+    if not lines[index].startswith('>'):
+        return None
+    quote_lines = []
+    consumed = 0
+    while index + consumed < len(lines):
+        current = lines[index + consumed]
+        if current.startswith('>'):
+            stripped = re.sub(r'^>\s?', '', current)
+            quote_lines.append(stripped)
+            consumed += 1
+        elif current.strip() == '':
+            next_idx = index + consumed + 1
+            if next_idx < len(lines) and lines[next_idx].startswith('>'):
+                next_stripped = re.sub(r'^>\s?', '', lines[next_idx])
+                if next_stripped.strip() in ALERT_TYPES:
+                    break
+                quote_lines.append('')
+                consumed += 1
+            else:
+                break
+        else:
+            break
+
+    # Check for alert
+    is_alert = False
+    alert_label = ''
+    if quote_lines and quote_lines[0].strip() in ALERT_TYPES:
+        alert_label, _, _ = ALERT_TYPES[quote_lines[0].strip()]
+        quote_lines = quote_lines[1:]
+        is_alert = True
+
+    parts = []
+    for ql in quote_lines:
+        text = apply_inline_rules(ql, fmt='docx') if ql.strip() else ''
+        if is_alert:
+            parts.append(f'<w:p><w:pPr><w:ind w:left="720"/><w:shd w:val="clear" w:fill="E6F0FA"/></w:pPr>'
+                         f'<w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>')
+        else:
+            parts.append(f'<w:p><w:pPr><w:ind w:left="720"/><w:pBdr>'
+                         f'<w:left w:val="single" w:sz="12" w:space="4" w:color="CCCCCC"/>'
+                         f'</w:pBdr></w:pPr><w:r><w:rPr><w:color w:val="666666"/></w:rPr>'
+                         f'<w:t xml:space="preserve">{text}</w:t></w:r></w:p>')
+    if is_alert:
+        alert_para = (f'<w:p><w:pPr><w:ind w:left="720"/><w:shd w:val="clear" w:fill="E6F0FA"/></w:pPr>'
+                      f'<w:r><w:rPr><w:b/><w:color w:val="365F91"/></w:rPr>'
+                      f'<w:t>{alert_label}</w:t></w:r></w:p>')
+        parts.insert(0, alert_para)
+
+    return ('\n'.join(parts), consumed)
+
+def docx_block_list(lines, index):
+    if not detect_list_item(lines[index]):
+        return None
+    parts = []
+    consumed = 0
+    while index + consumed < len(lines):
+        list_info = detect_list_item(lines[index + consumed])
+        if not list_info:
+            break
+        nest_level, marker_type, content = list_info
+        is_task, is_checked, task_content = detect_task_checkbox(content)
+        display_content = task_content if is_task else content
+        formatted = apply_inline_rules(display_content, fmt='docx')
+        indent = 720 + (nest_level * 360)
+
+        if is_task:
+            checkbox = '\u2611' if is_checked else '\u2610'
+            prefix = f'{checkbox} '
+        elif marker_type == 'unordered':
+            prefix = '\u2022 '
+        else:
+            number = marker_type.split(':')[1]
+            prefix = f'{number}. '
+
+        parts.append(
+            f'<w:p><w:pPr><w:ind w:left="{indent}"/><w:spacing w:after="40"/></w:pPr>'
+            f'<w:r><w:t xml:space="preserve">{prefix}{formatted}</w:t></w:r></w:p>'
+        )
+        consumed += 1
+    return ('\n'.join(parts), consumed)
+
+def docx_block_footnote_def(lines, index):
+    match = re.match(r'^\[\^([^\]]+)\]:\s*(.*)', lines[index])
+    if not match:
+        return None
+    fid = match.group(1)
+    ftext = match.group(2)
+    _collected_footnotes.append((fid, ftext))
+    return ('', 1)
+
+def docx_block_paragraph(lines, index):
+    collected = []
+    consumed = 0
+    while index + consumed < len(lines):
+        current = lines[index + consumed]
+        if current.strip() == '':
+            break
+        if consumed > 0 and (
+            re.match(r'^#{1,6}\s', current) or
+            re.match(r'^(\s*)```', current) or
+            re.match(r'^(\s*[-*_]\s*){3,}$', current) or
+            current.startswith('>') or
+            re.match(r'^\s*<(picture|img)\s', current, re.IGNORECASE) or
+            detect_list_item(current) or
+            ('|' in current and current.strip().startswith('|'))
+        ):
+            break
+        collected.append(current)
+        consumed += 1
+    if not collected:
+        return None
+    paragraph_text = ' '.join(collected)
+    formatted = apply_inline_rules(paragraph_text, fmt='docx')
+    return (f'<w:p><w:r><w:t xml:space="preserve">{formatted}</w:t></w:r></w:p>', consumed)
+
+
 # Ordered list of block rules — first match wins
-BLOCK_RULES = [
-    block_blank_line,
-    block_horizontal_rule,
-    block_heading,
-    block_html_picture,
-    block_html_img,
-    block_fenced_code,
-    block_table,
-    block_blockquote,
-    block_list,
-    block_footnote_def,
-    block_paragraph,
-]
+BLOCK_RULES = {
+    'rtf': [
+        block_blank_line,
+        block_horizontal_rule,
+        block_heading,
+        block_html_picture,
+        block_html_img,
+        block_fenced_code,
+        block_table,
+        block_blockquote,
+        block_list,
+        block_footnote_def,
+        block_paragraph,
+    ],
+    'docx': [
+        docx_block_blank_line,
+        docx_block_horizontal_rule,
+        docx_block_heading,
+        docx_block_html_picture,
+        docx_block_html_img,
+        docx_block_fenced_code,
+        docx_block_table,
+        docx_block_blockquote,
+        docx_block_list,
+        docx_block_footnote_def,
+        docx_block_paragraph,
+    ],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -818,7 +1072,7 @@ def convert_markdown_to_rtf(markdown_text):
 
     while line_index < len(lines):
         matched = False
-        for block_rule in BLOCK_RULES:
+        for block_rule in BLOCK_RULES['rtf']:
             result = block_rule(lines, line_index)
             if result is not None:
                 rtf_content, lines_consumed = result
@@ -839,23 +1093,157 @@ def convert_markdown_to_rtf(markdown_text):
 
 
 # ---------------------------------------------------------------------------
+# DOCX CONVERSION ENGINE
+# ---------------------------------------------------------------------------
+
+DOCX_STYLES_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults><w:rPrDefault><w:rPr>
+    <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/>
+    <w:sz w:val="22"/><w:szCs w:val="22"/>
+  </w:rPr></w:rPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="480" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="48"/><w:color w:val="365F91"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="280" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="36"/><w:color w:val="365F91"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="240" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="30"/><w:color w:val="365F91"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="200" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="26"/><w:color w:val="365F91"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading5"><w:name w:val="heading 5"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="160" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="24"/><w:color w:val="365F91"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading6"><w:name w:val="heading 6"/>
+    <w:pPr><w:keepNext/><w:spacing w:before="120" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="22"/><w:color w:val="365F91"/></w:rPr></w:style>
+</w:styles>'''
+
+
+def _build_docx_footnotes_section():
+    """Build footnotes section as DOCX XML paragraphs."""
+    if not _collected_footnotes:
+        return ''
+    parts = []
+    parts.append('<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>')
+    parts.append('<w:p><w:pPr><w:spacing w:before="120"/></w:pPr>'
+                 '<w:r><w:rPr><w:b/><w:sz w:val="20"/></w:rPr><w:t>Footnotes</w:t></w:r></w:p>')
+    for fid, ftext in _collected_footnotes:
+        formatted = apply_inline_rules(ftext, fmt='docx')
+        bookmark = f'fn-{fid}'
+        bid = hash(bookmark) % 10000
+        parts.append(
+            f'<w:p><w:pPr><w:ind w:left="360"/><w:spacing w:after="40"/></w:pPr>'
+            f'<w:bookmarkStart w:id="{bid}" w:name="{bookmark}"/>'
+            f'<w:bookmarkEnd w:id="{bid}"/>'
+            f'<w:r><w:rPr><w:b/><w:sz w:val="18"/></w:rPr><w:t>{fid}.</w:t></w:r>'
+            f'<w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t xml:space="preserve"> {formatted}</w:t></w:r></w:p>'
+        )
+    return '\n'.join(parts)
+
+
+def convert_markdown_to_docx(markdown_text, output_path):
+    """Convert a GFM markdown string to a DOCX file."""
+    import zipfile
+    global _DOCX_HYPERLINK_COUNTER
+    _DOCX_HYPERLINK_COUNTER = 0
+    _DOCX_HYPERLINKS.clear()
+    _collected_footnotes.clear()
+
+    lines = markdown_text.split('\n')
+    body_parts = []
+    line_index = 0
+
+    while line_index < len(lines):
+        matched = False
+        for block_rule in BLOCK_RULES['docx']:
+            result = block_rule(lines, line_index)
+            if result is not None:
+                xml_content, lines_consumed = result
+                if xml_content:
+                    body_parts.append(xml_content)
+                line_index += lines_consumed
+                matched = True
+                break
+        if not matched:
+            line_index += 1
+
+    # Append footnotes
+    footnotes_xml = _build_docx_footnotes_section()
+    if footnotes_xml:
+        body_parts.append(footnotes_xml)
+
+    # Build document.xml
+    body_content = '\n'.join(body_parts)
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<w:body>'
+        f'{body_content}'
+        '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>'
+        '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>'
+        '</w:sectPr></w:body></w:document>'
+    )
+
+    # Build document.xml.rels (styles + hyperlinks)
+    rels = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>']
+    for rid, url in _DOCX_HYPERLINKS.items():
+        rels.append(f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="{url}" TargetMode="External"/>')
+    rels.append('</Relationships>')
+    doc_rels_xml = '\n'.join(rels)
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+        '</Types>'
+    )
+
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        '</Relationships>'
+    )
+
+    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('[Content_Types].xml', content_types)
+        zf.writestr('_rels/.rels', root_rels)
+        zf.writestr('word/document.xml', document_xml)
+        zf.writestr('word/_rels/document.xml.rels', doc_rels_xml)
+        zf.writestr('word/styles.xml', DOCX_STYLES_XML)
+
+
+# ---------------------------------------------------------------------------
 # CLI ENTRY POINT
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print(f'Usage: {sys.argv[0]} <input.md> [output.rtf]', file=sys.stderr)
+        print(f'Usage: {sys.argv[0]} <input.md> [output.rtf|output.docx]', file=sys.stderr)
         sys.exit(1)
 
     input_markdown_path = sys.argv[1]
-    output_rtf_path = sys.argv[2] if len(sys.argv) > 2 else input_markdown_path.rsplit('.', 1)[0] + '.rtf'
+    output_path = sys.argv[2] if len(sys.argv) > 2 else input_markdown_path.rsplit('.', 1)[0] + '.rtf'
 
     with open(input_markdown_path, 'r', encoding='utf-8') as markdown_file:
         markdown_content = markdown_file.read()
 
-    rtf_output = convert_markdown_to_rtf(markdown_content)
+    if output_path.endswith('.docx'):
+        convert_markdown_to_docx(markdown_content, output_path)
+    else:
+        rtf_output = convert_markdown_to_rtf(markdown_content)
+        with open(output_path, 'w', encoding='utf-8') as rtf_file:
+            rtf_file.write(rtf_output)
 
-    with open(output_rtf_path, 'w', encoding='utf-8') as rtf_file:
-        rtf_file.write(rtf_output)
-
-    print(f'Converted: {input_markdown_path} -> {output_rtf_path}')
+    print(f'Converted: {input_markdown_path} -> {output_path}')
