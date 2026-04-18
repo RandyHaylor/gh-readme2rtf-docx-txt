@@ -28,7 +28,7 @@ jobs:
         shell: python
         env:
           SETTINGS_PATH: gh-readme2rtf-docx-txt-settings.json
-          WORKFLOW_PATH: .github/workflows/gh-readme2rtf-docx-txt.yml
+          WORKFLOW_PATH: .github/workflows/gh-readme2rtf-docx-txt/gh-readme2rtf-docx-txt.yml
         run: |
           import json
           import os
@@ -83,7 +83,7 @@ jobs:
       - name: Commit workflow sync if changed
         shell: bash
         run: |
-          git add .github/workflows/gh-readme2rtf-docx-txt.yml
+          git add .github/workflows/gh-readme2rtf-docx-txt/gh-readme2rtf-docx-txt.yml
           if git diff --cached --quiet; then
             echo "workflow already in sync with settings — nothing to commit"
             exit 0
@@ -92,7 +92,7 @@ jobs:
           git push
 
       - name: Convert README
-        uses: ./.github/actions/gh-readme2rtf-docx-txt
+        uses: ./.github/workflows/gh-readme2rtf-docx-txt
 
       - name: Stage generated files
         shell: bash

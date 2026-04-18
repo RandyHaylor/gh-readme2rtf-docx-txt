@@ -1,3 +1,5 @@
 node_modules/
 .~lock.*
 Link to *
+__pycache__/
+*.pyc
