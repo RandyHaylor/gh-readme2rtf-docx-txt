@@ -9,6 +9,7 @@
     },
     {
       "input": "example-module-with-readme/README.md",
+      "enabled": false,
       "output_formats": ["rtf"],
       "attach_to_release": false,
       "commit_to_repo": true,
