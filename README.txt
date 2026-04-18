@@ -165,7 +165,7 @@ And a <br/>hard break via HTML.
 
 Here is an [inline link](https://example.com) and a [link to a section](#tables).
 
-Here is a relative link to [another file](../SKILL.md).
+Here is a relative link to [another file](https://github.com/RandyHaylor/gh-readme2rtf-docx-txt/blob/main/SKILL.md).
 
 Bare URL autolink: https://github.com
 
