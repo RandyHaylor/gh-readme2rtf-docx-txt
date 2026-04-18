@@ -441,6 +441,10 @@ def _detect_github_repo():
             return _GITHUB_REPO_SLUG
     except Exception:
         pass
+    env_slug = os.environ.get('GITHUB_REPOSITORY', '').strip()
+    if env_slug:
+        _GITHUB_REPO_SLUG = env_slug
+        return _GITHUB_REPO_SLUG
     _GITHUB_REPO_SLUG = ''  # cache the miss
     return None
 
