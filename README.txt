@@ -76,54 +76,47 @@ Edit `gh-readme2rtf-docx-txt-settings.json` at the repo root:
 
 Each entry picks any combination of `rtf`, `docx`, `txt`. Multiple `files` entries are supported — e.g. a top-level README plus submodule READMEs.
 
+> **Settings location note:** the settings file lives at the repo root by default. If you prefer a different location (e.g. `config/readme-docs.json`), update the path in two places in `.github/workflows/gh-readme2rtf-docx-txt.yml`: the `paths:` trigger entry **and** the `SETTINGS_PATH` env var of the sync step. The workflow's self-sync logic keeps everything else in step from there.
+
 ### 3. Add the workflow
 
-Create `.github/workflows/gh-readme2rtf-docx-txt.yml`:
+Copy `.github/workflows/gh-readme2rtf-docx-txt.yml` from this repo into your own — it's already wired up. Key pieces:
 
 ```yaml
-name: Convert README to RTF/DOCX/TXT
-
 on:
   workflow_dispatch:
   push:
     paths:
+      - 'gh-readme2rtf-docx-txt-settings.json'
+      # ↓ additional entries are auto-appended by the sync step below,
+      #   mirroring every `input` path from the settings file.
       - 'README.md'
 
 jobs:
   convert:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
+      - name: Sync workflow trigger paths to settings file
+        # Reads the settings JSON, rewrites this file's `paths:` block if it
+        # drifts. Commits a small workflow-only update when it changes.
+        shell: python
+        ...
+
       - name: Convert README
         uses: ./.github/actions/gh-readme2rtf-docx-txt
-
-      - name: Configure git
-        shell: bash
-        run: git config user.name "github-actions[bot]"
-
-      - name: Configure git email
-        shell: bash
-        run: git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Stage generated files
-        shell: bash
-        run: git add *.rtf *.docx *.txt 2>/dev/null || true
-
-      - name: Commit if changed
-        shell: bash
-        run: 'git diff --cached --quiet || git commit -m "auto-regenerate README documents"'
-
-      - name: Push
-        shell: bash
-        run: git push
+      # ... stage, commit, push generated files
 ```
+
+See the workflow file in this repo for the full listing.
 
 ### 4. Push and done
 
-Every time `README.md` changes, the workflow regenerates the configured outputs and commits them back. You can also trigger it manually from the Actions tab.
+The workflow is triggered by **any push that modifies the settings file or one of the tracked input files**. It regenerates the configured outputs and commits them back. You can also trigger it manually from the Actions tab.
+
+**How the trigger stays in sync:** The `paths:` block starts seeded with just the settings file. On every run, the first step reads the settings file, computes the set of tracked inputs, and — if the workflow's `paths:` list doesn't already match — rewrites that block and commits the workflow file. So the next time you add or remove an `input` entry in the settings file, the workflow re-triggers itself, self-heals, and then future edits to the newly-tracked paths start firing the workflow automatically.
+
+Converter source-code changes do **not** auto-trigger the workflow — run it manually from the Actions tab when you want to regenerate outputs after a code change.
 
 ## How It Works
 

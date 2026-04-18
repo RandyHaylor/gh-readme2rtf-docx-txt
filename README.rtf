@@ -273,49 +273,38 @@ cp gh-readme2rtf-docx-txt-settings.json .\line
 \cf23 \}\cf1 \line
 \par}
 {\pard\sb0\sa120\f0\fs22 Each entry picks any combination of {\f1\fs20\chshdng1\chcbpat8 rtf}, {\f1\fs20\chshdng1\chcbpat8 docx}, {\f1\fs20\chshdng1\chcbpat8 txt}. Multiple {\f1\fs20\chshdng1\chcbpat8 files} entries are supported \u8212? e.g. a top-level README plus submodule READMEs.\par}
+{\pard\sb60\sa60\li480\brdrl\brdrs\brdrw20\brsp80\cf3\f0\fs22 {\b Settings location note:} the settings file lives at the repo root by default. If you prefer a different location (e.g. {\f1\fs20\chshdng1\chcbpat8 config/readme-docs.json}), update the path in two places in {\f1\fs20\chshdng1\chcbpat8 .github/workflows/gh-readme2rtf-docx-txt.yml}: the {\f1\fs20\chshdng1\chcbpat8 paths:} trigger entry {\b and} the {\f1\fs20\chshdng1\chcbpat8 SETTINGS_PATH} env var of the sync step. The workflow's self-sync logic keeps everything else in step from there.\par}
 {\pard\sb240\sa120\keepn\f0\fs30\cf2\b {\*\bkmkstart 3-add-the-workflow}3. Add the workflow{\*\bkmkend 3-add-the-workflow}\par}
-{\pard\sb0\sa120\f0\fs22 Create {\f1\fs20\chshdng1\chcbpat8 .github/workflows/gh-readme2rtf-docx-txt.yml}:\par}
-{\pard\sb100\sa100\f1\fs20\cbpat8\li360\ri360 \cf18 name\cf1 \cf23 :\cf1  Convert README to RTF/DOCX/TXT\line
-\line
-\cf18 on\cf1 \cf23 :\cf1 \line
+{\pard\sb0\sa120\f0\fs22 Copy {\f1\fs20\chshdng1\chcbpat8 .github/workflows/gh-readme2rtf-docx-txt.yml} from this repo into your own \u8212? it's already wired up. Key pieces:\par}
+{\pard\sb100\sa100\f1\fs20\cbpat8\li360\ri360 \cf18 on\cf1 \cf23 :\cf1 \line
   \cf18 workflow_dispatch\cf1 \cf23 :\cf1 \line
   \cf18 push\cf1 \cf23 :\cf1 \line
     \cf18 paths\cf1 \cf23 :\cf1 \line
+      \cf23 -\cf1  \cf19 '\cf1 \cf19 gh-readme2rtf-docx-txt-settings.json\cf1 \cf19 '\cf1 \line
+      \cf20 # \u8595? additional entries are auto-appended by the sync step below,\cf1 \line
+      \cf20 #   mirroring every `input` path from the settings file.\cf1 \line
       \cf23 -\cf1  \cf19 '\cf1 \cf19 README.md\cf1 \cf19 '\cf1 \line
 \line
 \cf18 jobs\cf1 \cf23 :\cf1 \line
   \cf18 convert\cf1 \cf23 :\cf1 \line
-    \cf18 runs-on\cf1 \cf23 :\cf1  ubuntu-latest\line
-    \cf18 permissions\cf1 \cf23 :\cf1 \line
-      \cf18 contents\cf1 \cf23 :\cf1  write\line
     \cf18 steps\cf1 \cf23 :\cf1 \line
       \cf23 -\cf1  \cf18 uses\cf1 \cf23 :\cf1  actions/checkout@v4\line
 \line
+      \cf23 -\cf1  \cf18 name\cf1 \cf23 :\cf1  Sync workflow trigger paths to settings file\line
+        \cf20 # Reads the settings JSON, rewrites this file's `paths:` block if it\cf1 \line
+        \cf20 # drifts. Commits a small workflow-only update when it changes.\cf1 \line
+        \cf18 shell\cf1 \cf23 :\cf1  python\line
+        ...\line
+\line
       \cf23 -\cf1  \cf18 name\cf1 \cf23 :\cf1  Convert README\line
         \cf18 uses\cf1 \cf23 :\cf1  ./.github/actions/gh-readme2rtf-docx-txt\line
-\line
-      \cf23 -\cf1  \cf18 name\cf1 \cf23 :\cf1  Configure git\line
-        \cf18 shell\cf1 \cf23 :\cf1  bash\line
-        \cf18 run\cf1 \cf23 :\cf1  git config user.name "github-actions[bot]"\line
-\line
-      \cf23 -\cf1  \cf18 name\cf1 \cf23 :\cf1  Configure git email\line
-        \cf18 shell\cf1 \cf23 :\cf1  bash\line
-        \cf18 run\cf1 \cf23 :\cf1  git config user.email "github-actions[bot]@users.noreply.github.com"\line
-\line
-      \cf23 -\cf1  \cf18 name\cf1 \cf23 :\cf1  Stage generated files\line
-        \cf18 shell\cf1 \cf23 :\cf1  bash\line
-        \cf18 run\cf1 \cf23 :\cf1  git add *.rtf *.docx *.txt 2>/dev/null || true\line
-\line
-      \cf23 -\cf1  \cf18 name\cf1 \cf23 :\cf1  Commit if changed\line
-        \cf18 shell\cf1 \cf23 :\cf1  bash\line
-        \cf18 run\cf1 \cf23 :\cf1  \cf19 '\cf1 \cf19 git\cf1  \cf19 diff\cf1  \cf19 --cached\cf1  \cf19 --quiet\cf1  \cf19 ||\cf1  \cf19 git\cf1  \cf19 commit\cf1  \cf19 -m\cf1  \cf19 "auto-regenerate\cf1  \cf19 README\cf1  \cf19 documents"\cf1 \cf19 '\cf1 \line
-\line
-      \cf23 -\cf1  \cf18 name\cf1 \cf23 :\cf1  Push\line
-        \cf18 shell\cf1 \cf23 :\cf1  bash\line
-        \cf18 run\cf1 \cf23 :\cf1  git push\line
+      \cf20 # ... stage, commit, push generated files\cf1 \line
 \par}
+{\pard\sb0\sa120\f0\fs22 See the workflow file in this repo for the full listing.\par}
 {\pard\sb240\sa120\keepn\f0\fs30\cf2\b {\*\bkmkstart 4-push-and-done}4. Push and done{\*\bkmkend 4-push-and-done}\par}
-{\pard\sb0\sa120\f0\fs22 Every time {\f1\fs20\chshdng1\chcbpat8 README.md} changes, the workflow regenerates the configured outputs and commits them back. You can also trigger it manually from the Actions tab.\par}
+{\pard\sb0\sa120\f0\fs22 The workflow is triggered by {\b any push that modifies the settings file or one of the tracked input files}. It regenerates the configured outputs and commits them back. You can also trigger it manually from the Actions tab.\par}
+{\pard\sb0\sa120\f0\fs22 {\b How the trigger stays in sync:} The {\f1\fs20\chshdng1\chcbpat8 paths:} block starts seeded with just the settings file. On every run, the first step reads the settings file, computes the set of tracked inputs, and \u8212? if the workflow's {\f1\fs20\chshdng1\chcbpat8 paths:} list doesn't already match \u8212? rewrites that block and commits the workflow file. So the next time you add or remove an {\f1\fs20\chshdng1\chcbpat8 input} entry in the settings file, the workflow re-triggers itself, self-heals, and then future edits to the newly-tracked paths start firing the workflow automatically.\par}
+{\pard\sb0\sa120\f0\fs22 Converter source-code changes do {\b not} auto-trigger the workflow \u8212? run it manually from the Actions tab when you want to regenerate outputs after a code change.\par}
 {\pard\sb280\sa120\keepn\f0\fs36\cf2\b {\*\bkmkstart how-it-works}How It Works{\*\bkmkend how-it-works}\par}
 {\pard\sb0\sa120\f0\fs22 Two Python files, zero heavy dependencies:\par}
 {\pard\sb36\sa36\li480\fi-360\f0\fs22 1.  {\b {\f1\fs20\chshdng1\chcbpat8 gh-readme2rtf-docx-txt.py}} \u8212? Single converter driven by a data-driven rule engine. Parses GitHub-Flavored Markdown and emits RTF, DOCX, or TXT based on the output extension. Uses {\field{\*\fldinst HYPERLINK "https://pygments.org/"}{\fldrslt \cf2 Pygments}} for syntax highlighting across both RTF and DOCX. Resolves {\f1\fs20\chshdng1\chcbpat8 @mentions}, {\f1\fs20\chshdng1\chcbpat8 #issues}, and relative links to GitHub URLs automatically.\par}
