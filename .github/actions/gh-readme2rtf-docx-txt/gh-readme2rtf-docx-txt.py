@@ -1711,279 +1711,65 @@ def convert_markdown_to_docx(markdown_text, output_path):
 
 # ---------------------------------------------------------------------------
 # TXT CONVERSION
+# Markdown is passed through verbatim. The only transformation is resolving
+# relative URLs in [text](url) links to full GitHub blob URLs so an offline
+# reader has complete, clickable paths instead of broken relative references.
 # ---------------------------------------------------------------------------
 
-def _txt_strip_inline(text, repo=None):
-    """Strip GFM inline markers from text, expanding links/refs to plain-text form."""
-    # HTML comments
-    text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
-    # Escaped markdown chars
-    text = re.sub(r'\\([*#_~`\[\]\\])', r'\1', text)
-    # HTML line break
-    text = re.sub(r'<br\s*/?>', '\n', text)
-    # Superscript/subscript HTML
-    text = re.sub(r'<su[pb]>(.*?)</su[pb]>', r'\1', text, flags=re.DOTALL)
-    # <ins> underline
-    text = re.sub(r'<ins>(.*?)</ins>', r'\1', text, flags=re.DOTALL)
-    # HTML <img> tags: extract alt attribute before stripping
-    text = re.sub(r'<img\b[^>]*\balt="([^"]*)"[^>]*/?>',
-                  lambda m: f'[Image: {m.group(1)}]' if m.group(1) else '[Image]', text)
-    text = re.sub(r'<img\b[^>]*/?>',  '[Image]', text)  # img with no alt
-    # <picture> and <source> tags: strip entirely
-    text = re.sub(r'<picture\b[^>]*>.*?</picture>', '', text, flags=re.DOTALL)
-    # Remaining HTML tags
-    text = re.sub(r'<[^>]+>', '', text)
-    # Images: ![alt](src) → [Image: alt]
-    text = re.sub(r'!\[([^\]]*)\]\([^)]+\)', lambda m: f'[Image: {m.group(1)}]' if m.group(1) else '[Image]', text)
-    # Inline links: [text](#anchor) → text  |  [text](url) → text (url)
-    text = re.sub(r'\[([^\]]+)\]\(#[^)]*\)', r'\1', text)
-    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\1 (\2)', text)
-    # Bare URLs: keep as-is
-    # Inline code: strip backticks, keep content
-    text = re.sub(r'`([^`]+)`', r'\1', text)
-    # Bold+italic
-    text = re.sub(r'\*\*\*(.+?)\*\*\*', r'\1', text)
-    # Bold
-    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-    text = re.sub(r'__(.+?)__', r'\1', text)
-    # Italic
-    text = re.sub(r'\*(.+?)\*', r'\1', text)
-    text = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'\1', text)
-    # Strikethrough
-    text = re.sub(r'~~(.+?)~~', r'\1', text)
-    # @mentions → @username (https://github.com/username)
-    text = re.sub(r'@(\w[\w/-]*)', lambda m: f'@{m.group(1)} (https://github.com/{m.group(1)})', text)
-    # #issue refs → #42 (https://...) when repo is known
-    if repo:
-        text = re.sub(r'(?<![&A-Fa-f0-9])#(\d+)\b',
-                      lambda m: f'#{m.group(1)} (https://github.com/{repo}/issues/{m.group(1)})', text)
-    # Footnote refs [^id] → [id]
-    text = re.sub(r'\[\^([^\]]+)\]', r'[\1]', text)
-    # Emoji shortcodes
-    text = re.sub(r':\w+:', lambda m: EMOJI_MAP.get(m.group(0), m.group(0)), text)
-    return text
-
-
-def _txt_format_table(raw_rows):
-    """Format a list of string-lists as aligned plain-text columns."""
-    if not raw_rows:
-        return ''
-    col_count = max(len(r) for r in raw_rows)
-    col_widths = [0] * col_count
-    for row in raw_rows:
-        for j, cell in enumerate(row):
-            if j < col_count:
-                col_widths[j] = max(col_widths[j], len(cell))
-    output_lines = []
-    for row_index, row in enumerate(raw_rows):
-        padded_cells = []
-        for j in range(col_count):
-            cell = row[j] if j < len(row) else ''
-            padded_cells.append(cell.ljust(col_widths[j]))
-        output_lines.append('  '.join(padded_cells).rstrip())
-        if row_index == 0:
-            output_lines.append('  '.join('-' * w for w in col_widths).rstrip())
-    return '\n'.join(output_lines)
-
-
-def convert_markdown_to_txt(markdown_text):
-    """Convert GFM markdown to clean plain text.
-    - h1 underlined with =, h2 with -, h3+ prefixed with #
-    - Tables aligned with space-padded columns
-    - @mentions and #issues expanded to include URLs
-    - Footnotes collected and appended at end
-    - Code blocks indented 4 spaces
+def _txt_resolve_relative_links_only(markdown_text, input_file_path=None):
+    """Return markdown unchanged except: relative URLs in [text](url) links
+    are resolved to full GitHub blob URLs using the detected repo slug.
+    Absolute URLs (http/https), anchors (#), and mailto: are untouched.
     """
+    import posixpath
+
     repo = _detect_github_repo()
-    lines = markdown_text.split('\n')
-    output_parts = []
-    footnote_defs = []  # list of (id_str, text_str)
-    i = 0
-    in_html_comment = False
+    if not repo:
+        return markdown_text
 
-    while i < len(lines):
-        line = lines[i]
+    # Determine the directory of the input file relative to the repo root
+    # so we can resolve paths like ../SKILL.md correctly.
+    input_dir_relative_to_repo_root = ''
+    if input_file_path:
+        import subprocess as _sp
+        try:
+            repo_root = _sp.run(
+                ['git', 'rev-parse', '--show-toplevel'],
+                capture_output=True, text=True
+            ).stdout.strip()
+            abs_input_dir = os.path.dirname(os.path.abspath(input_file_path))
+            input_dir_relative_to_repo_root = os.path.relpath(abs_input_dir, repo_root).replace(os.sep, '/')
+            if input_dir_relative_to_repo_root == '.':
+                input_dir_relative_to_repo_root = ''
+        except Exception:
+            pass
 
-        # Multi-line HTML comment tracking
-        if in_html_comment:
-            if '-->' in line:
-                in_html_comment = False
-            i += 1
-            continue
-        if '<!--' in line and '-->' not in line:
-            in_html_comment = True
-            i += 1
-            continue
+    base_github_blob_url = f'https://github.com/{repo}/blob/main'
 
-        stripped = line.strip()
+    def _resolve_one_link(match):
+        link_text = match.group(1)
+        url = match.group(2)
+        if url.startswith(('http://', 'https://', '#', 'mailto:')):
+            return match.group(0)  # leave absolute links and anchors unchanged
+        # Resolve the relative path against the input file's directory
+        if input_dir_relative_to_repo_root:
+            resolved_path = posixpath.normpath(
+                posixpath.join(input_dir_relative_to_repo_root, url)
+            )
+        else:
+            resolved_path = posixpath.normpath(url)
+        # If the resolved path escapes the repo root (e.g. ../outside), leave unchanged
+        if resolved_path.startswith('..'):
+            return match.group(0)
+        full_url = f'{base_github_blob_url}/{resolved_path}'
+        return f'[{link_text}]({full_url})'
 
-        # Blank line
-        if stripped == '':
-            output_parts.append('')
-            i += 1
-            continue
+    return re.sub(r'\[([^\]]+)\]\(([^)]+)\)', _resolve_one_link, markdown_text)
 
-        # Setext-style heading (underline with === or ---)
-        if i + 1 < len(lines):
-            next_stripped = lines[i + 1].strip()
-            if re.match(r'^=+$', next_stripped) and stripped:
-                heading_text = _txt_strip_inline(stripped, repo)
-                output_parts.append(heading_text)
-                output_parts.append('=' * len(heading_text))
-                i += 2
-                continue
-            if re.match(r'^-+$', next_stripped) and stripped and not re.match(r'^[-*_]{3,}\s*$', stripped):
-                heading_text = _txt_strip_inline(stripped, repo)
-                output_parts.append(heading_text)
-                output_parts.append('-' * len(heading_text))
-                i += 2
-                continue
 
-        # ATX heading: # H1, ## H2, etc.
-        heading_match = re.match(r'^(#{1,6})\s+(.*)', line)
-        if heading_match:
-            level = len(heading_match.group(1))
-            heading_text = _txt_strip_inline(heading_match.group(2).rstrip('#').strip(), repo)
-            if level == 1:
-                output_parts.append(heading_text)
-                output_parts.append('=' * len(heading_text))
-            elif level == 2:
-                output_parts.append(heading_text)
-                output_parts.append('-' * len(heading_text))
-            else:
-                output_parts.append(('#' * level) + ' ' + heading_text)
-            i += 1
-            continue
-
-        # Horizontal rule
-        if re.match(r'^[-*_]{3,}\s*$', stripped):
-            output_parts.append('\u2500' * 40)
-            i += 1
-            continue
-
-        # Fenced code block
-        fence_match = re.match(r'^(`{3,}|~{3,})', line)
-        if fence_match:
-            fence_chars = fence_match.group(1)
-            i += 1
-            code_lines = []
-            while i < len(lines):
-                if lines[i].strip() == fence_chars or lines[i].strip().startswith(fence_chars):
-                    i += 1
-                    break
-                code_lines.append('    ' + lines[i])
-                i += 1
-            output_parts.extend(code_lines if code_lines else [''])
-            continue
-
-        # Footnote definition [^id]: text
-        fn_def_match = re.match(r'^\[\^([^\]]+)\]:\s*(.*)', line)
-        if fn_def_match:
-            footnote_defs.append((fn_def_match.group(1), fn_def_match.group(2)))
-            i += 1
-            continue
-
-        # Table: line starts with | or contains pipe and next line is separator
-        if '|' in line:
-            is_separator_line = lambda l: bool(re.match(r'^[\s|:\-]+$', l)) and '|' in l and '-' in l
-            # Peek: if next line is a separator, this is a table header
-            if i + 1 < len(lines) and is_separator_line(lines[i + 1]):
-                raw_rows = []
-                while i < len(lines) and '|' in lines[i]:
-                    if is_separator_line(lines[i]):
-                        i += 1
-                        continue
-                    cells = [c.strip() for c in lines[i].strip().strip('|').split('|')]
-                    cells = [_txt_strip_inline(c, repo) for c in cells]
-                    raw_rows.append(cells)
-                    i += 1
-                output_parts.append(_txt_format_table(raw_rows))
-                continue
-
-        # Blockquote / GFM alert
-        if re.match(r'^>', line):
-            quote_lines = []
-            while i < len(lines):
-                current = lines[i]
-                if re.match(r'^>', current):
-                    inner = re.sub(r'^>\s?', '', current)
-                    # Stop if the NEXT content line starts a new alert block (like RTF does)
-                    if quote_lines and inner.strip() in ALERT_TYPES:
-                        break
-                    quote_lines.append(inner)
-                    i += 1
-                elif current.strip() == '' and i + 1 < len(lines):
-                    # Continue past blank line only if next non-blank is still a blockquote
-                    # AND not a new alert block
-                    next_line = lines[i + 1]
-                    if re.match(r'^>', next_line):
-                        next_inner = re.sub(r'^>\s?', '', next_line)
-                        if next_inner.strip() in ALERT_TYPES:
-                            break  # New alert — let the outer loop handle it
-                        quote_lines.append('')
-                        i += 1
-                    else:
-                        break
-                else:
-                    break
-            # Check for alert label
-            if quote_lines and quote_lines[0].strip() in ALERT_TYPES:
-                alert_label = ALERT_TYPES[quote_lines[0].strip()][0]
-                quote_lines = quote_lines[1:]
-                output_parts.append(f'[{alert_label.upper()}]')
-            for ql in quote_lines:
-                if ql.strip():
-                    output_parts.append('  ' + _txt_strip_inline(ql, repo))
-                else:
-                    output_parts.append('')
-            continue
-
-        # List item
-        list_info = detect_list_item(line)
-        if list_info:
-            while i < len(lines):
-                list_info = detect_list_item(lines[i])
-                if not list_info:
-                    break
-                nest_level, marker_type, content = list_info
-                is_task, is_checked, task_content = detect_task_checkbox(content)
-                display_content = task_content if is_task else content
-                indent = '  ' * nest_level
-                if is_task:
-                    bullet = '[x]' if is_checked else '[ ]'
-                elif marker_type == 'unordered':
-                    bullet = '\u2022'
-                else:
-                    number = marker_type.split(':')[1]
-                    bullet = f'{number}.'
-                output_parts.append(f'{indent}{bullet} {_txt_strip_inline(display_content, repo)}')
-                i += 1
-            continue
-
-        # Regular paragraph
-        para_lines = []
-        while i < len(lines) and lines[i].strip() != '':
-            # Stop at block-level constructs
-            if (re.match(r'^#{1,6}\s', lines[i]) or re.match(r'^[-*_]{3,}\s*$', lines[i].strip())
-                    or re.match(r'^(`{3,}|~{3,})', lines[i]) or re.match(r'^>', lines[i])
-                    or detect_list_item(lines[i]) or re.match(r'^\[\^', lines[i])):
-                break
-            para_lines.append(lines[i])
-            i += 1
-        if para_lines:
-            combined = ' '.join(para_lines)
-            output_parts.append(_txt_strip_inline(combined, repo))
-        continue
-
-    # Footnotes section at end
-    if footnote_defs:
-        output_parts.append('')
-        output_parts.append('\u2500' * 40)
-        for fid, ftext in footnote_defs:
-            output_parts.append(f'[{fid}] {_txt_strip_inline(ftext, repo)}')
-
-    return '\n'.join(output_parts)
-
+def convert_markdown_to_txt(markdown_text, input_file_path=None):
+    """Return markdown verbatim with only relative URLs in [text](url) links resolved."""
+    return _txt_resolve_relative_links_only(markdown_text, input_file_path)
 
 # ---------------------------------------------------------------------------
 # CLI ENTRY POINT
@@ -2003,7 +1789,7 @@ if __name__ == '__main__':
     if output_path.endswith('.docx'):
         convert_markdown_to_docx(markdown_content, output_path)
     elif output_path.endswith('.txt'):
-        txt_output = convert_markdown_to_txt(markdown_content)
+        txt_output = convert_markdown_to_txt(markdown_content, input_markdown_path)
         with open(output_path, 'w', encoding='utf-8') as txt_file:
             txt_file.write(txt_output)
     else:
