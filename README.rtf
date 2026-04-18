@@ -299,6 +299,74 @@ If {\f1\fs20\chshdng1\chcbpat8 attach_to_release: true} is set in the settings b
 \cf23 \}\cf1 \line
 \par}
 {\pard\sb0\sa120\f0\fs22 Each entry picks any combination of {\f1\fs20\chshdng1\chcbpat8 rtf}, {\f1\fs20\chshdng1\chcbpat8 docx}, {\f1\fs20\chshdng1\chcbpat8 txt}. Multiple {\f1\fs20\chshdng1\chcbpat8 files} entries are supported \u8212? e.g. a top-level README plus submodule READMEs.\par}
+{\pard\sb0\sa120\f0\fs22 {\b Per-entry flags:}\par}
+{\trowd
+\clbrdrt\brdrs\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx2250
+\clbrdrt\brdrs\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx4500
+\clbrdrt\brdrs\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx6750
+\clbrdrt\brdrs\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx9000
+\pard\intbl
+{\b Key}\cell
+{\b Type}\cell
+{\b Default}\cell
+{\b What it does}\cell
+\row}
+{\trowd
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx2250
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx4500
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx6750
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx9000
+\pard\intbl
+{\f1\fs20\chshdng1\chcbpat8 input}\cell
+string\cell
+{\i required}\cell
+Path to the markdown file to convert\cell
+\row}
+{\trowd
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx2250
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx4500
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx6750
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx9000
+\pard\intbl
+{\f1\fs20\chshdng1\chcbpat8 output_formats}\cell
+`["rtf"\\cell
+"docx"\\cell
+"txt"]`\cell
+\row}
+{\trowd
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx2250
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx4500
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx6750
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx9000
+\pard\intbl
+{\f1\fs20\chshdng1\chcbpat8 enabled}\cell
+bool\cell
+{\f1\fs20\chshdng1\chcbpat8 true}\cell
+Set to {\f1\fs20\chshdng1\chcbpat8 false} to {\b skip this entry entirely} — useful for temporarily disabling an entry without deleting it, or for stubbing out a pointer to a file you haven't created yet.\cell
+\row}
+{\trowd
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx2250
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx4500
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx6750
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx9000
+\pard\intbl
+{\f1\fs20\chshdng1\chcbpat8 attach_to_release}\cell
+bool\cell
+{\f1\fs20\chshdng1\chcbpat8 false}\cell
+Upload the generated files as assets on the active release tag\cell
+\row}
+{\trowd
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx2250
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx4500
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx6750
+\clbrdrb\brdrs\clbrdrl\brdrs\clbrdrr\brdrs\cellx9000
+\pard\intbl
+{\f1\fs20\chshdng1\chcbpat8 commit_to_repo}\cell
+bool\cell
+{\f1\fs20\chshdng1\chcbpat8 true}\cell
+Commit the generated files back into the repo (reserved for future wiring — currently the workflow always commits)\cell
+\row}
+{\pard\sb0\sa120\f0\fs22 If an entry's {\f1\fs20\chshdng1\chcbpat8 input} file doesn't exist and the entry is {\f1\fs20\chshdng1\chcbpat8 enabled}, the workflow reports a clear error but {\b continues processing the other entries} \u8212? successfully-converted files are still committed/uploaded.\par}
 {\pard\sb60\sa60\li480\brdrl\brdrs\brdrw20\brsp80\cf3\f0\fs22 {\b Settings location note:} the settings file lives at the repo root by default. If you prefer a different location (e.g. {\f1\fs20\chshdng1\chcbpat8 config/readme-docs.json}), update the path in two places in {\f1\fs20\chshdng1\chcbpat8 .github/workflows/gh-readme2rtf-docx-txt.yml}: the {\f1\fs20\chshdng1\chcbpat8 paths:} trigger entry {\b and} the {\f1\fs20\chshdng1\chcbpat8 SETTINGS_PATH} env var of the sync step. The workflow's self-sync logic keeps everything else in step from there.\par}
 {\pard\sb240\sa120\keepn\f0\fs30\cf2\b {\*\bkmkstart 3-add-the-workflow}3. Add the workflow{\*\bkmkend 3-add-the-workflow}\par}
 {\pard\sb0\sa120\f0\fs22 Copy {\f1\fs20\chshdng1\chcbpat8 .github/workflows/gh-readme2rtf-docx-txt.yml} from this repo into your own \u8212? it's already wired up. Key pieces:\par}

@@ -97,6 +97,18 @@ Edit `gh-readme2rtf-docx-txt-settings.json` at the repo root:
 
 Each entry picks any combination of `rtf`, `docx`, `txt`. Multiple `files` entries are supported — e.g. a top-level README plus submodule READMEs.
 
+**Per-entry flags:**
+
+| Key | Type | Default | What it does |
+|---|---|---|---|
+| `input` | string | *required* | Path to the markdown file to convert |
+| `output_formats` | `["rtf"\|"docx"\|"txt"]` | `["rtf"]` | Which formats to generate |
+| `enabled` | bool | `true` | Set to `false` to **skip this entry entirely** — useful for temporarily disabling an entry without deleting it, or for stubbing out a pointer to a file you haven't created yet. |
+| `attach_to_release` | bool | `false` | Upload the generated files as assets on the active release tag |
+| `commit_to_repo` | bool | `true` | Commit the generated files back into the repo (reserved for future wiring — currently the workflow always commits) |
+
+If an entry's `input` file doesn't exist and the entry is `enabled`, the workflow reports a clear error but **continues processing the other entries** — successfully-converted files are still committed/uploaded.
+
 > **Settings location note:** the settings file lives at the repo root by default. If you prefer a different location (e.g. `config/readme-docs.json`), update the path in two places in `.github/workflows/gh-readme2rtf-docx-txt.yml`: the `paths:` trigger entry **and** the `SETTINGS_PATH` env var of the sync step. The workflow's self-sync logic keeps everything else in step from there.
 
 ### 3. Add the workflow
