@@ -28,6 +28,6 @@ example.doSomething("hello");
 > This module works best with Node.js 18+.
 
 > [!NOTE]
-> Edited to test whether pushes to nested READMEs also trigger the conversion workflow.
+> Edited twice to test the settings-driven trigger path sync — this push should now fire the workflow via the `example-module-with-readme/README.md` entry.
 
 See the [main project README](../README.md) for more details.
