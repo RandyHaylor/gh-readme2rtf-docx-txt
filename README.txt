@@ -1,6 +1,6 @@
 # :rocket: gh-readme2rtf-docx-txt — Auto-Convert GitHub READMEs to RTF, DOCX & TXT :tada:
 
-> **Your README.md, rendered as shareable RTF, DOCX, and TXT files — automatically, on every push.**
+> **Your README.md, rendered as shareable RTF, DOCX, and TXT files — automatically, on every push or release.**
 
 ```
              ┌──▶  README.rtf  ── Word / LibreOffice / WordPad / TextEdit
