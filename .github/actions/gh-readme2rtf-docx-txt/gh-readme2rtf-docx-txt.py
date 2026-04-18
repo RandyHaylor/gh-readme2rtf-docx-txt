@@ -1518,6 +1518,50 @@ def _build_docx_footnotes_section():
     return '\n'.join(parts)
 
 
+def _docx_inject_sectpr_into_last_paragraph(body_xml, section_properties_xml):
+    """Move the section properties element into the last paragraph's pPr.
+
+    Why: a body-level `<w:sectPr>` causes Word to render an implicit trailing
+    empty paragraph, which appears as a blank final page. Embedding it inside
+    the last paragraph's `<w:pPr>` defines the section without that ghost.
+
+    If the last paragraph already has a `<w:pPr>`, append the sectPr just
+    before `</w:pPr>`. If it has no pPr, inject a new pPr containing only the
+    sectPr right after the opening `<w:p>` tag.
+
+    Fallback: if no `</w:p>` is found (empty document), return the body_xml
+    with the sectPr appended directly — matches the old behavior.
+    """
+    last_paragraph_close_index = body_xml.rfind('</w:p>')
+    if last_paragraph_close_index == -1:
+        return body_xml + section_properties_xml
+    last_paragraph_open_index = body_xml.rfind('<w:p>', 0, last_paragraph_close_index)
+    last_paragraph_open_with_attrs_index = body_xml.rfind('<w:p ', 0, last_paragraph_close_index)
+    paragraph_start_index = max(last_paragraph_open_index, last_paragraph_open_with_attrs_index)
+    if paragraph_start_index == -1:
+        return body_xml + section_properties_xml
+    last_paragraph_xml = body_xml[paragraph_start_index:last_paragraph_close_index]
+    existing_ppr_close_index = last_paragraph_xml.find('</w:pPr>')
+    if existing_ppr_close_index != -1:
+        rebuilt_last_paragraph = (
+            last_paragraph_xml[:existing_ppr_close_index]
+            + section_properties_xml
+            + last_paragraph_xml[existing_ppr_close_index:]
+        )
+    else:
+        paragraph_open_tag_end_index = last_paragraph_xml.find('>') + 1
+        rebuilt_last_paragraph = (
+            last_paragraph_xml[:paragraph_open_tag_end_index]
+            + f'<w:pPr>{section_properties_xml}</w:pPr>'
+            + last_paragraph_xml[paragraph_open_tag_end_index:]
+        )
+    return (
+        body_xml[:paragraph_start_index]
+        + rebuilt_last_paragraph
+        + body_xml[last_paragraph_close_index:]
+    )
+
+
 def _docx_cleanup_structural_markers(body_xml):
     """Run once after all blocks are assembled, before text restoration.
     Rewrites any `[tag]`-style structural markers to proper nested XML. Currently
@@ -1760,16 +1804,25 @@ def convert_markdown_to_docx(markdown_text, output_path):
     # Single final escape pass — restore all stashed user text with XML escaping.
     body_content = docx_restore_all_stashed_text(body_content)
 
-    # Build document.xml
+    # Embed sectPr inside the last paragraph's pPr instead of as a direct <w:body>
+    # child. A body-level sectPr causes Word to render an implicit trailing empty
+    # paragraph, which shows up as a blank final page. Embedding it in the last
+    # paragraph's pPr defines the section without adding a ghost paragraph.
+    section_properties_xml = (
+        '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>'
+        '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>'
+        '</w:sectPr>'
+    )
+    body_content_with_section_properties = _docx_inject_sectpr_into_last_paragraph(
+        body_content, section_properties_xml
+    )
     document_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
         ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         '<w:body>'
-        f'{body_content}'
-        '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>'
-        '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>'
-        '</w:sectPr></w:body></w:document>'
+        f'{body_content_with_section_properties}'
+        '</w:body></w:document>'
     )
 
     # Build document.xml.rels (styles + hyperlinks + images)
