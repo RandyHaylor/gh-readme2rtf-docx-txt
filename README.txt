@@ -73,6 +73,13 @@ The zip also includes `gh-readme2rtf-docx-txt.rtf` (a renamed copy of this READM
 
 > **Why this layout?** The workflow YAML must live directly in `.github/workflows/` — GitHub only discovers workflows at that exact path. Everything else (the composite action, Python scripts) is consolidated into one sibling folder, `.github/actions/gh-readme2rtf-docx-txt/`. The settings file sits at the repo root so it's easy to find and edit.
 
+> [!WARNING]
+> **Committing generated files back to your repo complicates git operations.** Every push that edits a tracked README will produce an auto-commit of regenerated `.rtf` / `.docx` / `.txt` files, meaning **you must `git pull` after every such push before continuing work** — otherwise your next push will reject as non-fast-forward.
+>
+> **Recommended setup: attach generated files to releases, not commits.** Point the settings file's `commit_to_repo` flag to `false` and `attach_to_release` to `true`; then create a release (or trigger the workflow from a `release: published` event) whenever you want a fresh rendered set. The workflow will upload assets to whatever tag is currently active, the same way `gh release upload` does in other workflows. No in-repo binary churn.
+>
+> If `attach_to_release: true` is set in the settings but no release tag is active (no release exists and the workflow wasn't triggered by a release event), the workflow will **error out with a clear message**, while still committing any files that have `commit_to_repo: true` — so you don't lose work.
+
 ### 2. Configure which files and formats to generate
 
 Edit `gh-readme2rtf-docx-txt-settings.json` at the repo root:

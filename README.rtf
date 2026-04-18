@@ -271,6 +271,22 @@ Horizontal rules\cell
             \u9492?\u9472?\u9472? rtf_image_embedder.py       \u9668?\u9472?\u9472? RTF image post-processor\par}
 {\pard\sb0\sa120\f0\fs22 The zip also includes {\f1\fs20\chshdng1\chcbpat8 gh-readme2rtf-docx-txt.rtf} (a renamed copy of this README rendered to RTF) so you can see a working example of the tool's output right next to the files.\par}
 {\pard\sb60\sa60\li480\brdrl\brdrs\brdrw20\brsp80\cf3\f0\fs22 {\b Why this layout?} The workflow YAML must live directly in {\f1\fs20\chshdng1\chcbpat8 .github/workflows/} \u8212? GitHub only discovers workflows at that exact path. Everything else (the composite action, Python scripts) is consolidated into one sibling folder, {\f1\fs20\chshdng1\chcbpat8 .github/actions/gh-readme2rtf-docx-txt/}. The settings file sits at the repo root so it's easy to find and edit.\par}
+{\trowd\trbrdrt\brdrnone\trbrdrb\brdrnone\trbrdrl\brdrnone\trbrdrr\brdrnone\trgaph80
+\clbrdrt\brdrnone\clbrdrb\brdrnone\clbrdrl\brdrnone\clbrdrr\brdrnone\clcbpat16\cellx120
+\clbrdrt\brdrnone\clbrdrb\brdrnone\clbrdrl\brdrnone\clbrdrr\brdrnone\cellx9000
+\pard\intbl \cell
+{\pard\intbl\sb60\sa0\f0\fs24\b\cf16 Warning}\cell
+\row}
+{\trowd\trbrdrt\brdrnone\trbrdrb\brdrnone\trbrdrl\brdrnone\trbrdrr\brdrnone\trgaph80
+\clbrdrt\brdrnone\clbrdrb\brdrnone\clbrdrl\brdrnone\clbrdrr\brdrnone\clcbpat16\cellx120
+\clbrdrt\brdrnone\clbrdrb\brdrnone\clbrdrl\brdrnone\clbrdrr\brdrnone\cellx9000
+\pard\intbl \cell
+{\pard\intbl\sb0\sa60\f0\fs22 {\b Committing generated files back to your repo complicates git operations.} Every push that edits a tracked README will produce an auto-commit of regenerated {\f1\fs20\chshdng1\chcbpat8 .rtf} / {\f1\fs20\chshdng1\chcbpat8 .docx} / {\f1\fs20\chshdng1\chcbpat8 .txt} files, meaning {\b you must {\f1\fs20\chshdng1\chcbpat8 git pull} after every such push before continuing work} \u8212? otherwise your next push will reject as non-fast-forward.\line
+\line
+{\b Recommended setup: attach generated files to releases, not commits.} Point the settings file's {\f1\fs20\chshdng1\chcbpat8 commit_to_repo} flag to {\f1\fs20\chshdng1\chcbpat8 false} and {\f1\fs20\chshdng1\chcbpat8 attach_to_release} to {\f1\fs20\chshdng1\chcbpat8 true}; then create a release (or trigger the workflow from a {\f1\fs20\chshdng1\chcbpat8 release: published} event) whenever you want a fresh rendered set. The workflow will upload assets to whatever tag is currently active, the same way {\f1\fs20\chshdng1\chcbpat8 gh release upload} does in other workflows. No in-repo binary churn.\line
+\line
+If {\f1\fs20\chshdng1\chcbpat8 attach_to_release: true} is set in the settings but no release tag is active (no release exists and the workflow wasn't triggered by a release event), the workflow will {\b error out with a clear message}, while still committing any files that have {\f1\fs20\chshdng1\chcbpat8 commit_to_repo: true} \u8212? so you don't lose work.}\cell
+\row}
 {\pard\sb240\sa120\keepn\f0\fs30\cf2\b {\*\bkmkstart 2-configure-which-files-and-formats-to-generate}2. Configure which files and formats to generate{\*\bkmkend 2-configure-which-files-and-formats-to-generate}\par}
 {\pard\sb0\sa120\f0\fs22 Edit {\f1\fs20\chshdng1\chcbpat8 gh-readme2rtf-docx-txt-settings.json} at the repo root:\par}
 {\pard\sb100\sa100\f1\fs20\cbpat8\li360\ri360 \cf23 \{\cf1 \line
